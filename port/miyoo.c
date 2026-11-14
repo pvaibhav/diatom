@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Miyoo Mini Flip port (TortOS plorpos-f1p): SigmaStar SSD202D, no GPU.
  *
- * Video: the core's frame is scaled by the CPU into the back page of fb0
- * (752x560, 32-bit xRGB, three pages), turned 180 degrees, and panned onto
- * glass: port/miyoo_scale.c, with the three filters of ADR-0050. No shaders -
- * there is nothing to run them on; ADR-0041's chain carries the scanline
- * filter instead (plorpos-f1p.75), drawn by the same scaler.
+ * Video: the core's frame is scaled and turned 180 degrees into the back page
+ * of fb0 (752x560, 32-bit xRGB, three pages) and panned onto glass. The
+ * vendor's blitter scales Soft and Crisp, after a CPU upscale for Crisp; the
+ * CPU draws Integer (ADR-0050, choose_path below). No shaders - there is
+ * nothing to run them on; ADR-0041's chain carries the scanline filter
+ * instead (plorpos-f1p.75), which the blitter draws.
  *
  * Audio: the vendor's MI_AO, reached with dlopen so the build needs none of
  * the vendor's libraries or headers. ALSA hw:0,0 and OSS /dev/dsp both play
@@ -612,6 +613,27 @@ static unsigned g_presents, g_lk_downs, g_lk_down_miss;
 static double   g_lk_down_fps;
 static bool     g_gfx;               /* defined with MI_GFX below */
 static diatom_pixfmt g_fmt;          /* the last frame's, for that line */
+static unsigned g_blit_fail;         /* blits that failed, the frame drawn on the CPU instead */
+
+/* How a frame reaches the page (ADR-0050). Chosen by choose_path whenever the
+ * frame's size or format, the rect, the filter or the scanlines change. */
+typedef enum {
+	PATH_BLIT,    /* the frame as it is; the blitter scales it (Soft, scanlines) */
+	PATH_CRISP,   /* the frame upscaled kx by ky on the CPU; the blitter scales that down */
+	PATH_CPU      /* the CPU scaler draws it (Integer, Crisp at whole factors, no blitter) */
+} present_path;
+typedef struct {
+	int           w, h;
+	diatom_pixfmt fmt;
+	diatom_rect   dst;
+	diatom_filter filter;
+	bool          scan;
+	present_path  path;
+	int           kx, ky;
+	diatom_filter cpu;       /* the CPU scaler's filter, also when a blit fails */
+	char          what[48];  /* for the game-end line, e.g. "Crisp/upscale 3x4" */
+} path_choice;
+static path_choice g_path;
 
 static void *flipper(void *arg)
 {
@@ -900,7 +922,6 @@ void diatom_port_content_fps(double fps)
 	uint64_t t0;
 
 	if (fps <= 0 && g_presents) {   /* a game ends: its one summary line (plorpos-f1p.91) */
-		static const char *const filter[] = { "Sharp", "Crisp", "Soft" };   /* by diatom_filter */
 		unsigned pans, lost;
 
 		pthread_mutex_lock(&g_flip_lock);
@@ -909,13 +930,15 @@ void diatom_port_content_fps(double fps)
 		fprintf(stderr, "flip: game: %u pans, %u never shown, panel %.3f Hz, blit %.2f / hand-over %.2f ms (%s, %s)",
 		        pans, lost, g_panel_us > 0 ? 1e6 / g_panel_us : 0.0,
 		        g_blit_us / (double)g_presents / 1000.0, g_hand_us / (double)g_presents / 1000.0,
-		        g_gfx ? "MI_GFX" : filter[g_scaler.filter], g_fmt == DIATOM_PIX_RGB565 ? "RGB565" : "XRGB8888");
+		        g_path.what, g_fmt == DIATOM_PIX_RGB565 ? "RGB565" : "XRGB8888");
 		if (g_gfx_err) fprintf(stderr, ", %u filter blit errors", g_gfx_err);
+		if (g_blit_fail) fprintf(stderr, ", %u blits failed and drawn on the CPU", g_blit_fail);
 		if (g_lk_downs)
 			fprintf(stderr, ", lock stood down %ux (last %u/120 slipped, %.1f fps)",
 			        g_lk_downs, g_lk_down_miss, g_lk_down_fps);
 		fputc('\n', stderr);
 		g_presents = 0;
+		g_blit_fail = 0;
 	}
 	if (!g_rt_tgen) return;
 	if (fps > 0) {
@@ -953,10 +976,8 @@ void diatom_port_content_fps(double fps)
 
 /* The hardware path: the core's frame copied into MMA memory (physically
  * contiguous, which the 2D engine needs), then one MI_GFX blit scales it,
- * converts it to xRGB and turns it 180 degrees into fb0's back page. Off
- * unless asked for (DIATOM_BLIT=hw, or TortOS/diatom.hwblit on the card):
- * the blitter smooths whenever it scales and has no nearest mode, so even
- * Integer was blurred (ADR-0050). It ignores the filter. */
+ * converts it to xRGB and turns it 180 degrees into fb0's back page. It
+ * always smooths when it scales; it has no nearest mode (ADR-0050). */
 static bool g_gfx;
 static unsigned long long g_src_phy;
 static void *g_src_virt;
@@ -1031,8 +1052,9 @@ static bool gfx_src(unsigned size)
 	return true;
 }
 
-static bool gfx_present(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
-                        diatom_rect d, int page)
+/* The w x h picture at the start of the MMA buffer, rows packed, blitted to
+ * rect d of the page. With fx, the scanline filter. */
+static bool gfx_blit(int w, int h, diatom_pixfmt fmt, diatom_rect d, int page, bool fx)
 {
 	unsigned bpp = fmt == DIATOM_PIX_RGB565 ? 2 : 4, row = (unsigned)w * bpp;
 	mi_gfx_surface ss, ds;
@@ -1040,10 +1062,6 @@ static bool gfx_present(const void *src, int w, int h, size_t pitch, diatom_pixf
 	mi_gfx_opt o;
 	unsigned short fence = 0;
 
-	if (!gfx_src(row * (unsigned)h)) return false;
-	for (int y = 0; y < h; y++)
-		memcpy((uint8_t *)g_src_virt + (size_t)y * row, (const uint8_t *)src + (size_t)y * pitch, row);
-	mi.flush(g_src_virt, row * (unsigned)h);
 	ss = (mi_gfx_surface){ g_src_phy, bpp == 2 ? MI_GFX_RGB565 : MI_GFX_ARGB8888,
 	                       (unsigned)w, (unsigned)h, row };
 	ds = (mi_gfx_surface){ g_fix.smem_start + (unsigned long long)page * g_var.yres * g_fix.line_length,
@@ -1053,7 +1071,6 @@ static bool gfx_present(const void *src, int w, int h, size_t pitch, diatom_pixf
 	dr = (mi_gfx_rect){ (int)g_var.xres - d.x - d.w, (int)g_var.yres - d.y - d.h,
 	                    (unsigned)d.w, (unsigned)d.h };
 	mi_gfx_rect full = dr;
-	bool fx = g_fx != FX_OFF && d.h >= 2 * h;
 
 	if (fx) {
 		/* Scanlines: two panel rows lit, one dark, a fixed pitch of three whatever the scale (one panel row
@@ -1090,20 +1107,106 @@ static bool gfx_present(const void *src, int w, int h, size_t pitch, diatom_pixf
 	return true;
 }
 
+/* The frame copied into the MMA buffer as it is, then blitted. */
+static bool gfx_frame(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
+                      diatom_rect d, int page, bool fx)
+{
+	unsigned row = (unsigned)w * (fmt == DIATOM_PIX_RGB565 ? 2 : 4);
+
+	if (!gfx_src(row * (unsigned)h)) return false;
+	for (int y = 0; y < h; y++)
+		memcpy((uint8_t *)g_src_virt + (size_t)y * row, (const uint8_t *)src + (size_t)y * pitch, row);
+	mi.flush(g_src_virt, row * (unsigned)h);
+	return gfx_blit(w, h, fmt, d, page, fx);
+}
+
+/* Crisp: the frame upscaled kx by ky with nearest into the MMA buffer, which
+ * the blitter then scales down to the rect. */
+static void  *g_line;                /* one widened row, for diatom_upscale */
+static size_t g_line_size;
+
+static bool gfx_crisp(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
+                      diatom_rect d, int page, int kx, int ky)
+{
+	unsigned row = (unsigned)(w * kx) * (fmt == DIATOM_PIX_RGB565 ? 2 : 4), size = row * (unsigned)(h * ky);
+
+	if (row > g_line_size) {
+		void *n = realloc(g_line, row);
+
+		if (!n) return false;
+		g_line = n;
+		g_line_size = row;
+	}
+	if (!gfx_src(size)) return false;
+	diatom_upscale(src, w, h, pitch, fmt, kx, ky, g_src_virt, row, g_line, false);
+	mi.flush(g_src_virt, size);
+	return gfx_blit(w * kx, h * ky, fmt, d, page, false);
+}
+
+/* The path for this geometry (ADR-0050):
+ *   scanlines on              the blitter, which draws them (any filter);
+ *   NEAREST (Integer)         the CPU, so the pixels are exact;
+ *   Crisp, whole factors      the CPU with nearest: nothing to scale down;
+ *   Crisp                     the upscale, unless its buffer would be bigger
+ *                             than a panel page: then Soft;
+ *   Soft                      the blitter;
+ *   no blitter                the CPU with the filter asked for.
+ * A panel page (752x560x4, 1645 KB) is the most the CPU writes for Integer
+ * at full screen, so Crisp never writes more than that a frame. The common
+ * RGB565 frames fit: a 160x144 Game Boy at 5x4 is 900 KB, a 320x240
+ * PlayStation frame at 3x3 1350 KB. A 640x480 frame at 2x2 (2400 KB) does not. */
+static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter, bool scan)
+{
+	if (g_path.w == w && g_path.h == h && g_path.fmt == fmt && g_path.filter == filter &&
+	    g_path.scan == scan && !memcmp(&g_path.dst, &dst, sizeof dst))
+		return;
+
+	int kx = (dst.w + w - 1) / w, ky = (dst.h + h - 1) / h;
+	bool whole = dst.w == kx * w && dst.h == ky * h;
+	uint64_t bytes = (uint64_t)w * kx * h * ky * (fmt == DIATOM_PIX_RGB565 ? 2 : 4);
+
+	g_path = (path_choice){ .w = w, .h = h, .fmt = fmt, .dst = dst, .filter = filter, .scan = scan,
+	                           .path = PATH_CPU, .kx = kx, .ky = ky, .cpu = filter };
+	if (!g_gfx) {
+		snprintf(g_path.what, sizeof g_path.what, "%s/CPU, no blitter",
+		         filter == DIATOM_FILTER_NEAREST ? "Integer" : filter == DIATOM_FILTER_SHARP ? "Crisp" : "Soft");
+	} else if (scan) {
+		g_path.path = PATH_BLIT;
+		snprintf(g_path.what, sizeof g_path.what, "Scanlines/hardware");
+	} else if (filter == DIATOM_FILTER_NEAREST) {
+		snprintf(g_path.what, sizeof g_path.what, "Integer/CPU");
+	} else if (filter == DIATOM_FILTER_SHARP && whole) {
+		g_path.cpu = DIATOM_FILTER_NEAREST;
+		snprintf(g_path.what, sizeof g_path.what, "Crisp/CPU %dx%d", kx, ky);
+	} else if (filter == DIATOM_FILTER_SHARP && bytes <= (uint64_t)g_var.xres * g_var.yres * 4) {
+		g_path.path = PATH_CRISP;
+		snprintf(g_path.what, sizeof g_path.what, "Crisp/upscale %dx%d", kx, ky);
+	} else {
+		g_path.path = PATH_BLIT;
+		snprintf(g_path.what, sizeof g_path.what,
+		         filter == DIATOM_FILTER_SHARP ? "Soft/hardware, Crisp too big" : "Soft/hardware");
+		if (filter == DIATOM_FILTER_SHARP)
+			fprintf(stderr, "[info] video: Crisp drawn as Soft for %dx%d to %dx%d, its %dx%d upscale would be %llu KB\n",
+			        w, h, dst.w, dst.h, kx, ky, (unsigned long long)bytes / 1024);
+	}
+}
+
 void diatom_port_present(const void *src, int w, int h, size_t pitch,
                          diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter)
 {
 	int back = free_page();
 	uint32_t *px;
 	size_t pitch_px = g_fix.line_length / 4;
+	bool drawn = false;
 
 	if (!g_fbmem || !src || w <= 0 || h <= 0) return;
 	g_fmt = fmt;
 	px = page_px(back);
-	/* The rect moved, or an overlay was on this page: clear the borders. */
+	/* The scanline filter needs the game at 2x or more. */
 	bool scan = g_fx != FX_OFF && dst.h >= 2 * h;
 
-	/* Scanlines started or stopped with the rect unchanged (the core's frame
+	/* The rect moved, or an overlay was on this page: clear the borders.
+	 * Scanlines started or stopped with the rect unchanged (the core's frame
 	 * height changed): the rows they skip must not keep the last picture. */
 	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w || g_scan_drawn[back] != scan) {
 		clear_page(back);
@@ -1113,8 +1216,13 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	}
 	uint64_t t0 = diatom_port_now_us(), t1, t2;
 
-	if ((!g_gfx || !gfx_present(src, w, h, pitch, fmt, dst, back)) &&
-	    diatom_scaler_prepare(&g_scaler, w, h, dst, filter, (int)g_var.xres, (int)g_var.yres))
+	choose_path(w, h, fmt, dst, filter, scan);
+	if (g_path.path == PATH_BLIT)
+		drawn = gfx_frame(src, w, h, pitch, fmt, dst, back, scan);
+	else if (g_path.path == PATH_CRISP)
+		drawn = gfx_crisp(src, w, h, pitch, fmt, dst, back, g_path.kx, g_path.ky);
+	if (!drawn && g_path.path != PATH_CPU) g_blit_fail++;
+	if (!drawn && diatom_scaler_prepare(&g_scaler, w, h, dst, g_path.cpu, (int)g_var.xres, (int)g_var.yres))
 		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px);
 	t1 = diatom_port_now_us();
 	if (g_ov && diatom_port_now_us() < g_ov_until) {
@@ -1206,11 +1314,7 @@ bool diatom_port_init(diatom_port_caps *out)
 	rt_init();
 	if (pthread_create(&g_flip_thr, NULL, flipper, NULL) != 0) return false;
 
-	{
-		const char *e = getenv("DIATOM_BLIT");
-
-		g_gfx = ((e && !strcmp(e, "hw")) || access("/mnt/SDCARD/TortOS/diatom.hwblit", F_OK) == 0) && gfx_init();
-	}
+	g_gfx = gfx_init();
 	g_pad = open("/dev/input/event0", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (g_pad < 0) fprintf(stderr, "[warn] input: event0: %s\n", strerror(errno));
 
@@ -1239,6 +1343,9 @@ void diatom_port_shutdown(void)
 	 * longer (5 ms -> 22 ms) until a power cycle (plorpos-f1p.31). */
 	if (g_src_virt) { mi.munmap(g_src_virt, g_src_size); mi.mma_free(g_src_phy); g_src_virt = NULL; g_src_size = 0; }
 	diatom_scaler_free(&g_scaler);
+	free(g_line);
+	g_line = NULL;
+	g_line_size = 0;
 	audio_close();
 	if (g_pad >= 0) { close(g_pad); g_pad = -1; }
 	if (g_fbmem) { munmap(g_fbmem, g_fix.smem_len); g_fbmem = NULL; }
