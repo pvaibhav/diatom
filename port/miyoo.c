@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 /* Miyoo Mini Flip port (TortOS plorpos-f1p): SigmaStar SSD202D, no GPU.
  *
- * Video: the core's frame is scaled by the CPU (nearest) into the back page
- * of fb0 (752x560, 32-bit xRGB, three pages) and panned onto glass. No
- * shaders - there is nothing to run them on; ADR-0041's chain carries two display filters instead
- * (scanlines) that the blitter draws (plorpos-f1p.75).
+ * Video: the core's frame is scaled by the CPU into the back page of fb0
+ * (752x560, 32-bit xRGB, three pages), turned 180 degrees, and panned onto
+ * glass: port/miyoo_scale.c, with the three filters of ADR-0050. No shaders -
+ * there is nothing to run them on; ADR-0041's chain carries the scanline
+ * filter instead (plorpos-f1p.75), drawn by the same scaler.
  *
  * Audio: the vendor's MI_AO, reached with dlopen so the build needs none of
  * the vendor's libraries or headers. ALSA hw:0,0 and OSS /dev/dsp both play
@@ -16,7 +17,7 @@
  * Input: "soc:gpio_keys" (event0), a keyboard, in Miyoo's map.
  *
  * G2 scope (TortOS plorpos-f1p.6): enough to measure memory and speed.
- * Levels, mute handover, the lid and MI_GFX scaling are plorpos-f1p.8/.9. */
+ * Levels, mute handover and the lid are plorpos-f1p.8/.9. */
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -37,6 +38,7 @@
 #include <unistd.h>
 
 #include "diatom_port.h"
+#include "miyoo_scale.h"
 
 #define AUDIO_RATE          48000
 #define AUDIO_CHUNK         512     /* frames per MI_AO frame */
@@ -488,7 +490,7 @@ static struct fb_var_screeninfo g_var;
 static struct fb_fix_screeninfo g_fix;
 static int      g_page;             /* the page on glass */
 static diatom_rect g_last_dst[3];
-static uint32_t g_xmap[2048];
+static diatom_scaler g_scaler;
 /* The Flip's display filter (plorpos-f1p.75), picked through the shader chain the launcher sends: a chain
  * naming flipfx-scanlines is FX_SCAN, none is FX_OFF. It needs the game at 2x or more; below that it
  * draws plainly. */
@@ -512,45 +514,6 @@ static void pan_to(int page)
 	if (ioctl(g_fb, FBIOPAN_DISPLAY, &g_var) != 0)
 		ioctl(g_fb, FBIOPUT_VSCREENINFO, &g_var);
 	g_page = page;
-}
-
-static inline uint32_t rgb565(uint16_t p)
-{
-	uint32_t r = p >> 11 & 31, g = p >> 5 & 63, b = p & 31;
-
-	/* Top bits repeated into the bottom, so white is 0xFFFFFF, not 0xF8FCF8. */
-	return 0xFF000000u | (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
-}
-
-static void scale(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
-                  diatom_rect d, uint32_t *dst, size_t dpitch_px)
-{
-	int last_sy = -1;
-
-	if (d.w > (int)(sizeof g_xmap / sizeof g_xmap[0])) d.w = sizeof g_xmap / sizeof g_xmap[0];
-	for (int x = 0; x < d.w; x++) g_xmap[x] = (uint32_t)((long)x * w / d.w);
-	for (int y = 0; y < d.h; y++) {
-		int sy = (int)((long)y * h / d.h);
-		/* The panel is mounted upside down: logical (x, y) is glass
-		 * (W-1-x, H-1-y). `out` is the logical row's first pixel, and the row
-		 * runs DOWN in memory from there. */
-		uint32_t *out = dst + (size_t)(g_var.yres - 1 - (unsigned)(d.y + y)) * dpitch_px +
-		                (g_var.xres - 1 - (unsigned)d.x);
-		uint32_t *lo = out - (d.w - 1);
-
-		if (sy == last_sy) {            /* the row above, again (below in memory) */
-			memcpy(lo, lo + dpitch_px, (size_t)d.w * 4);
-			continue;
-		}
-		last_sy = sy;
-		if (fmt == DIATOM_PIX_RGB565) {
-			const uint16_t *in = (const uint16_t *)((const uint8_t *)src + (size_t)sy * pitch);
-			for (int x = 0; x < d.w; x++) out[-x] = rgb565(in[g_xmap[x]]);
-		} else {
-			const uint32_t *in = (const uint32_t *)((const uint8_t *)src + (size_t)sy * pitch);
-			for (int x = 0; x < d.w; x++) out[-x] = in[g_xmap[x]] | 0xFF000000u;
-		}
-	}
 }
 
 /* The overlay: a borrowed BGRA image, alpha-blended over the frame. */
@@ -579,7 +542,7 @@ static void draw_overlay(uint32_t *px, size_t pitch_px)
 	y0 = (int)g_var.yres - g_ov_h - (int)g_var.yres / 24;
 	for (int y = 0; y < g_ov_h; y++) {
 		const uint8_t *s = g_ov + (size_t)y * (size_t)g_ov_w * 4;
-		/* Turned 180 degrees, as scale() draws (the panel is upside down). */
+		/* Turned 180 degrees, as the scaler draws (the panel is upside down). */
 		uint32_t *d = px + (size_t)(g_var.yres - 1 - (unsigned)(y0 + y)) * pitch_px +
 		              (g_var.xres - 1 - (unsigned)x0);
 		for (int x = 0; x < g_ov_w; x++, s += 4) {
@@ -613,7 +576,7 @@ static void draw_bar(uint32_t *px, size_t pitch_px)
 	const int W = (int)g_var.xres, fill = W * g_bar_level / g_bar_max;
 
 	for (int y = 0; y < 12; y++) {
-		/* Turned 180 degrees, as scale() draws (the panel is upside down). */
+		/* Turned 180 degrees, as the scaler draws (the panel is upside down). */
 		uint32_t *row = px + (size_t)(g_var.yres - 1 - (unsigned)y) * pitch_px;
 		for (int x = 0; x < W; x++)
 			row[W - 1 - x] = y < 3 || y >= 9 ? scrim : x < fill ? on : off;
@@ -647,6 +610,7 @@ static uint64_t g_blit_us, g_hand_us;
 static unsigned g_presents, g_lk_downs, g_lk_down_miss;
 static double   g_lk_down_fps;
 static bool     g_gfx;               /* defined with MI_GFX below */
+static diatom_pixfmt g_fmt;          /* the last frame's, for that line */
 
 static void *flipper(void *arg)
 {
@@ -927,15 +891,16 @@ void diatom_port_content_fps(double fps)
 	uint64_t t0;
 
 	if (fps <= 0 && g_presents) {   /* a game ends: its one summary line (plorpos-f1p.91) */
+		static const char *const filter[] = { "Sharp", "Crisp", "Soft" };   /* by diatom_filter */
 		unsigned pans, lost;
 
 		pthread_mutex_lock(&g_flip_lock);
 		pans = g_pans; lost = g_replaced;
 		pthread_mutex_unlock(&g_flip_lock);
-		fprintf(stderr, "flip: game: %u pans, %u never shown, panel %.3f Hz, blit %.2f / hand-over %.2f ms (%s)",
+		fprintf(stderr, "flip: game: %u pans, %u never shown, panel %.3f Hz, blit %.2f / hand-over %.2f ms (%s, %s)",
 		        pans, lost, g_panel_us > 0 ? 1e6 / g_panel_us : 0.0,
 		        g_blit_us / (double)g_presents / 1000.0, g_hand_us / (double)g_presents / 1000.0,
-		        g_gfx ? "MI_GFX" : "CPU");
+		        g_gfx ? "MI_GFX" : filter[g_scaler.filter], g_fmt == DIATOM_PIX_RGB565 ? "RGB565" : "XRGB8888");
 		if (g_gfx_err) fprintf(stderr, ", %u filter blit errors", g_gfx_err);
 		if (g_lk_downs)
 			fprintf(stderr, ", lock stood down %ux (last %u/120 slipped, %.1f fps)",
@@ -979,8 +944,10 @@ void diatom_port_content_fps(double fps)
 
 /* The hardware path: the core's frame copied into MMA memory (physically
  * contiguous, which the 2D engine needs), then one MI_GFX blit scales it,
- * converts it to xRGB and turns it 180 degrees into fb0's back page. G2
- * measured the CPU path at 29.6 ms a frame (TortOS plorpos-f1p.6). */
+ * converts it to xRGB and turns it 180 degrees into fb0's back page. Off
+ * unless asked for (DIATOM_BLIT=hw, or TortOS/diatom.hwblit on the card):
+ * the blitter smooths whenever it scales and has no nearest mode, so even
+ * Integer was blurred (ADR-0050). It ignores the filter. */
 static bool g_gfx;
 static unsigned long long g_src_phy;
 static void *g_src_virt;
@@ -1120,9 +1087,9 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	int back = free_page();
 	uint32_t *px;
 	size_t pitch_px = g_fix.line_length / 4;
-	(void)filter;
 
 	if (!g_fbmem || !src || w <= 0 || h <= 0) return;
+	g_fmt = fmt;
 	px = page_px(back);
 	/* The rect moved, or an overlay was on this page: clear the borders. */
 	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w) {
@@ -1132,8 +1099,9 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	}
 	uint64_t t0 = diatom_port_now_us(), t1, t2;
 
-	if (!g_gfx || !gfx_present(src, w, h, pitch, fmt, dst, back))
-		scale(src, w, h, pitch, fmt, dst, px, pitch_px);
+	if ((!g_gfx || !gfx_present(src, w, h, pitch, fmt, dst, back)) &&
+	    diatom_scaler_prepare(&g_scaler, w, h, dst, filter, (int)g_var.xres, (int)g_var.yres))
+		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px, g_fx != FX_OFF && dst.h >= 2 * h);
 	t1 = diatom_port_now_us();
 	if (g_ov && diatom_port_now_us() < g_ov_until) {
 		draw_overlay(px, pitch_px);
@@ -1224,7 +1192,11 @@ bool diatom_port_init(diatom_port_caps *out)
 	rt_init();
 	if (pthread_create(&g_flip_thr, NULL, flipper, NULL) != 0) return false;
 
-	g_gfx = gfx_init();
+	{
+		const char *e = getenv("DIATOM_BLIT");
+
+		g_gfx = ((e && !strcmp(e, "hw")) || access("/mnt/SDCARD/TortOS/diatom.hwblit", F_OK) == 0) && gfx_init();
+	}
 	g_pad = open("/dev/input/event0", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (g_pad < 0) fprintf(stderr, "[warn] input: event0: %s\n", strerror(errno));
 
@@ -1252,6 +1224,7 @@ void diatom_port_shutdown(void)
 	 * a hundred diatom launches filled it, and then every blit took a vblank
 	 * longer (5 ms -> 22 ms) until a power cycle (plorpos-f1p.31). */
 	if (g_src_virt) { mi.munmap(g_src_virt, g_src_size); mi.mma_free(g_src_phy); g_src_virt = NULL; g_src_size = 0; }
+	diatom_scaler_free(&g_scaler);
 	audio_close();
 	if (g_pad >= 0) { close(g_pad); g_pad = -1; }
 	if (g_fbmem) { munmap(g_fbmem, g_fix.smem_len); g_fbmem = NULL; }
