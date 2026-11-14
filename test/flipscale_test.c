@@ -305,6 +305,51 @@ int main(void)
 		free_image(&im);
 	}
 
+	printf("flipscale: rects off the panel, frames too big, one scaler reused\n");
+	{
+		static const diatom_rect OFF[] = { { 10, 600, 23, 17 }, { 800, 10, 23, 17 }, { -40, 10, 23, 17 }, { 10, -40, 23, 17 } };
+		image im = make_image(7, 5, DIATOM_PIX_RGB565), big = make_image(240, 160, DIATOM_PIX_RGB565);
+		diatom_scaler s;
+		uint32_t *fb = page();
+		bool clean = true;
+
+		/* Nothing of the rect is on the panel: prepare may refuse or accept, and
+		 * a draw after either writes nothing. */
+		memset(&s, 0, sizeof s);
+		for (size_t i = 0; i < sizeof OFF / sizeof *OFF; i++) {
+			diatom_scaler_prepare(&s, im.w, im.h, OFF[i], DIATOM_FILTER_SHARP, FB_W, FB_H);
+			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W, false);
+		}
+		for (int i = 0; i < FB_W * FB_H; i++) clean &= fb[i] == SENTINEL;
+		CHECK(clean, "a rect wholly off the panel draws nothing");
+		CHECK(!diatom_scaler_prepare(&s, 40000, 5, (diatom_rect){ 0, 0, 100, 50 }, DIATOM_FILTER_NEAREST, FB_W, FB_H),
+		      "a frame wider than the column map holds is refused");
+		CHECK(!diatom_scaler_prepare(&s, 5, 40000, (diatom_rect){ 0, 0, 100, 50 }, DIATOM_FILTER_NEAREST, FB_W, FB_H),
+		      "a frame taller than the row map holds is refused");
+
+		/* The same scaler across a size, rect and filter change, as a game
+		 * that changes resolution does: the second draw matches a fresh one. */
+		{
+			diatom_rect d = { 0, 29, 752, 501 };
+			uint32_t *fresh = draw(&big, d, DIATOM_FILTER_LINEAR, false, false), *again = page();
+			bool same = true;
+
+			CHECK(diatom_scaler_prepare(&s, im.w, im.h, (diatom_rect){ 100, 50, 23, 17 }, DIATOM_FILTER_SHARP, FB_W, FB_H),
+			      "prepare after a refusal");
+			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W, false);
+			CHECK(diatom_scaler_prepare(&s, big.w, big.h, d, DIATOM_FILTER_LINEAR, FB_W, FB_H), "prepare for the new size");
+			diatom_scaler_draw(&s, big.px, big.pitch, big.fmt, again, FB_W, false);
+			for (int i = 0; i < FB_W * FB_H; i++) same &= again[i] == fresh[i];
+			CHECK(same, "a reused scaler draws what a fresh one does");
+			free(fresh);
+			free(again);
+		}
+		diatom_scaler_free(&s);
+		free(fb);
+		free_image(&im);
+		free_image(&big);
+	}
+
 	if (failures) { printf("flipscale: %d FAILED\n", failures); return 1; }
 	printf("flipscale: ok\n");
 	return 0;

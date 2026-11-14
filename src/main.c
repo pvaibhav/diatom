@@ -595,13 +595,19 @@ static bool filter_parse(const char *name, diatom_filter *out)
 	return false;
 }
 
+static diatom_fill g_ds_fill;   /* defined with the DS layouts below */
+
 /* What present samples with: the setting, except that an integer mode is
  * whole pixels whatever it says (ADR-0050). */
 static diatom_filter present_filter(void)
 {
 	diatom_scale_mode m = diatom_modes[g_mode].mode;
 
-	return m == DIATOM_SCALE_INTEGER || m == DIATOM_SCALE_INTEGER_OVER ? DIATOM_FILTER_NEAREST : g_filter;
+	if (m == DIATOM_SCALE_INTEGER || m == DIATOM_SCALE_INTEGER_OVER) return DIATOM_FILTER_NEAREST;
+	/* One DS screen at a whole multiple (fill=integer) is an integer mode too. */
+	if ((m == DIATOM_SCALE_DS_TOP || m == DIATOM_SCALE_DS_BOTTOM) && g_ds_fill == DIATOM_FILL_INTEGER)
+		return DIATOM_FILTER_NEAREST;
+	return g_filter;
 }
 
 /* The DS's layouts in pairs, the top screen big then the bottom (TortOS plorpos-jcj): Screen Layout rounds the

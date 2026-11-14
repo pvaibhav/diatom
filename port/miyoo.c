@@ -584,6 +584,7 @@ static void draw_bar(uint32_t *px, size_t pitch_px)
 }
 
 static diatom_rect g_ov_drawn[3];
+static bool g_scan_drawn[3];        /* the page was last drawn with scanlines */
 
 /* The flip thread: FBIOPAN_DISPLAY waits for vblank here (12.7 ms a frame
  * measured, TortOS plorpos-f1p.14), and waiting in present halved every
@@ -657,6 +658,14 @@ static int free_page(void)
 	pthread_mutex_lock(&g_flip_lock);
 	for (p = 0; p < g_npages; p++)
 		if (p != g_page && p != g_pending && p != g_inflight) break;
+	/* None free: one is on glass, one is being panned and one waits. Take the
+	 * waiting page back and draw the newer frame on it; the flip thread has
+	 * not touched it. Drawing on the page being panned showed half a frame. */
+	if (p >= g_npages && g_pending >= 0) {
+		p = g_pending;
+		g_pending = -1;
+		g_replaced++;
+	}
 	pthread_mutex_unlock(&g_flip_lock);
 	return p < g_npages ? p : (g_page == 0 ? 1 : 0);
 }
@@ -1092,16 +1101,21 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	g_fmt = fmt;
 	px = page_px(back);
 	/* The rect moved, or an overlay was on this page: clear the borders. */
-	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w) {
+	bool scan = g_fx != FX_OFF && dst.h >= 2 * h;
+
+	/* Scanlines started or stopped with the rect unchanged (the core's frame
+	 * height changed): the rows they skip must not keep the last picture. */
+	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w || g_scan_drawn[back] != scan) {
 		clear_page(back);
 		g_last_dst[back] = dst;
 		g_ov_drawn[back].w = 0;
+		g_scan_drawn[back] = scan;
 	}
 	uint64_t t0 = diatom_port_now_us(), t1, t2;
 
 	if ((!g_gfx || !gfx_present(src, w, h, pitch, fmt, dst, back)) &&
 	    diatom_scaler_prepare(&g_scaler, w, h, dst, filter, (int)g_var.xres, (int)g_var.yres))
-		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px, g_fx != FX_OFF && dst.h >= 2 * h);
+		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px, scan);
 	t1 = diatom_port_now_us();
 	if (g_ov && diatom_port_now_us() < g_ov_until) {
 		draw_overlay(px, pitch_px);

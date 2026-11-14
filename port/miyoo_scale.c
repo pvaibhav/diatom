@@ -84,6 +84,8 @@ bool diatom_scaler_prepare(diatom_scaler *s, int src_w, int src_h, diatom_rect d
 		return true;
 	s->valid = false;
 	if (src_w <= 0 || src_h <= 0 || dst.w <= 0 || dst.h <= 0) return false;
+	/* The maps hold source indices in 16 bits. No core sends a frame near this size. */
+	if (src_w > INT16_MAX || src_h > INT16_MAX) return false;
 
 	/* The part of dst on the panel: a mode may crop (the port interface). */
 	x0 = dst.x < 0 ? -dst.x : 0;
@@ -318,12 +320,12 @@ static void make_row(diatom_scaler *s, const void *src, size_t pitch, diatom_pix
 void diatom_scaler_draw(diatom_scaler *s, const void *src, size_t pitch, diatom_pixfmt fmt,
                         uint32_t *fb, size_t fb_pitch, bool scan)
 {
-	uint32_t *row = fb + (size_t)s->fb_y * fb_pitch + (size_t)s->fb_x;
 	int last_r = -1, last_w = -1;
 
-	if (!s->valid || !s->n) return;
+	if (!s->valid || !s->n || s->rows <= 0) return;
 	s->hsrc[0] = s->hsrc[1] = -1;          /* a new frame: nothing cached is current */
-	for (int j = 0; j < s->rows; j++, row -= fb_pitch) {
+	for (int j = 0; j < s->rows; j++) {
+		uint32_t *row = fb + (size_t)(s->fb_y - j) * fb_pitch + (size_t)s->fb_x;
 		int r = s->ridx[j], w = s->rw[j];
 
 		/* The scanline filter's dark rows: every third fb row of the rect. */
