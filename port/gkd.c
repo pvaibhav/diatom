@@ -614,10 +614,11 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 		}
 		gkdgl_upload(src, w, h, pitch, fmt);
 	}
-	/* SHARP is plain bilinear here, as it was under SDL_Renderer; the GKD
-	 * build no longer offers it (plorpos-gkd.73), shaders replace it. */
+	/* SHARP and LINEAR are both plain bilinear here, as SHARP was under
+	 * SDL_Renderer; the GKD build offers neither (plorpos-gkd.73), shaders
+	 * replace them. */
 	g_last_dst = dst;
-	g_last_linear = filter == DIATOM_FILTER_SHARP;
+	g_last_linear = filter != DIATOM_FILTER_NEAREST;
 	if (g_split) gkdgl_draw_split(g_sw, g_sh, g_split_top, g_split_bot, g_last_linear);
 	else         gkdgl_draw(g_sw, g_sh, dst, g_last_linear);
 	draw_cursor();

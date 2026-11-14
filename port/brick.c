@@ -1548,9 +1548,11 @@ static diatom_tap *build_map(int src, int dst, diatom_filter filter)
 		int    p  = (int)floor(c);
 		double fr = c - (double)p;
 
-		fr = (fr - 0.5) * scale + 0.5;
-		if (fr < 0.0) fr = 0.0;
-		if (fr > 1.0) fr = 1.0;
+		if (filter == DIATOM_FILTER_SHARP) {   /* LINEAR keeps the plain weight */
+			fr = (fr - 0.5) * scale + 0.5;
+			if (fr < 0.0) fr = 0.0;
+			if (fr > 1.0) fr = 1.0;
+		}
 
 		/* Clamp at the edges: no pixel outside the source to blend towards. */
 		if (p < 0)        { p = 0;       fr = 0.0; }

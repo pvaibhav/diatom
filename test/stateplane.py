@@ -187,6 +187,12 @@ send("DISPLAY"); got = drain()
 check_that("mode did not move either",
            len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer"), got)
 
+# filter=linear (ADR-0050), and back, so the rest runs as before.
+send("SETDISPLAY\tfilter=linear"); got = drain()
+check_that("filter=linear accepted, mode kept",
+           len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer\tfilter=linear\t"), got)
+send("SETDISPLAY\tfilter=nearest"); drain()
+
 # fill= (TortOS plorpos-6ei.12): aspect | stretch, the DS's one-screen and
 # Overlay layouts; anything else refuses the whole message.
 send("SETDISPLAY\tmode=aspect\tfill=bogus"); got = drain()
@@ -295,6 +301,17 @@ disp = [l for l in got if l.startswith("DISPLAY\t")]
 check_that("an unknown RUN mode= falls back to the start mode",
            disp and disp[0].startswith("DISPLAY\tmode=stretch")
            and not any(l.startswith("ERROR") for l in got), got)
+# filter= rides on RUN the same way (ADR-0050).
+send(f"RUN\tcore={ROOT}/build/desktop/stubcore.so\tfilter=sharp")
+got = drain(3.0); send("STOP"); drain(2.0)
+disp = [l for l in got if l.startswith("DISPLAY\t")]
+check_that("RUN filter= is the filter of the first DISPLAY",
+           disp and disp[0].startswith("DISPLAY\tmode=stretch\tfilter=sharp\t"), got)
+send(f"RUN\tcore={ROOT}/build/desktop/stubcore.so")
+got = drain(3.0); send("STOP"); drain(2.0)
+disp = [l for l in got if l.startswith("DISPLAY\t")]
+check_that("the next RUN without filter= is back on the start filter",
+           disp and disp[0].startswith("DISPLAY\tmode=stretch\tfilter=nearest\t"), got)
 # --- battery saves, game after game in one resident (plorpos-gkd.75) -------
 # The stub's SRAM changes at frame 30 of every game. Each game must get its
 # .srm, not only the first: the writer thread is started per game, and once

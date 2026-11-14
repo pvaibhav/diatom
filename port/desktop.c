@@ -211,8 +211,8 @@ static bool ensure_texture(int w, int h, diatom_pixfmt fmt, diatom_filter filter
 	 * across the whole source pixel where sharp-bilinear blends across one
 	 * destination pixel, which reads as blurrier than the device will look.
 	 * Good enough to check the geometry is right on desktop; judgment about
-	 * how a filter actually looks belongs on the panel. */
-	SDL_ScaleMode mode = (filter == DIATOM_FILTER_SHARP)
+	 * how a filter actually looks belongs on the panel. LINEAR is exact here. */
+	SDL_ScaleMode mode = (filter != DIATOM_FILTER_NEAREST)
 	                   ? SDL_ScaleModeLinear
 	                   : SDL_ScaleModeNearest;
 
