@@ -1,4 +1,4 @@
-# 0050. On the Miyoo Mini Flip, scale with the blitter, give Crisp a CPU upscale, and draw Integer on the CPU
+# 9001. On the Miyoo Mini Flip, scale with the blitter, give Crisp a CPU upscale, and draw Integer on the CPU
 
 - **Status:** Accepted
 - **Date:** 2026-11-15

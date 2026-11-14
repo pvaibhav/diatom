@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The Flip's CPU scaling (TortOS plorpos-f1p, ADR-0050). Its own file so the
+/* The Flip's CPU scaling (TortOS plorpos-f1p, ADR-9001). Its own file so the
  * host tests (test/flipscale_test.c) and the benchmark (tools/scalebench.c)
  * run the code the device runs, with no framebuffer and no vendor library.
  *

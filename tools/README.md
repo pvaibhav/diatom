@@ -154,7 +154,7 @@ Set `LD_LIBRARY_PATH` if the cores need runtime libraries beside them.
 ## `scalebench.c` - what the Flip's CPU scaling costs
 
 *How many ms a frame does the Flip's CPU scaling take
-([ADR-0050](../docs/decisions/0050-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md))?*
+([ADR-9001](../docs/decisions/9001-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md))?*
 
 Times `port/miyoo_scale.c` for five frame sizes (Game Boy, GBA, SNES, a 256x240
 XRGB8888 frame, Genesis) and the rects that Aspect, Stretch and Integer give on

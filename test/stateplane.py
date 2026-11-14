@@ -187,7 +187,7 @@ send("DISPLAY"); got = drain()
 check_that("mode did not move either",
            len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer"), got)
 
-# filter=linear (ADR-0050), and back, so the rest runs as before.
+# filter=linear (ADR-9001), and back, so the rest runs as before.
 send("SETDISPLAY\tfilter=linear"); got = drain()
 check_that("filter=linear accepted, mode kept",
            len(got) == 1 and got[0].startswith("DISPLAY\tmode=integer\tfilter=linear\t"), got)
@@ -301,7 +301,7 @@ disp = [l for l in got if l.startswith("DISPLAY\t")]
 check_that("an unknown RUN mode= falls back to the start mode",
            disp and disp[0].startswith("DISPLAY\tmode=stretch")
            and not any(l.startswith("ERROR") for l in got), got)
-# filter= rides on RUN the same way (ADR-0050).
+# filter= rides on RUN the same way (ADR-9001).
 send(f"RUN\tcore={ROOT}/build/desktop/stubcore.so\tfilter=sharp")
 got = drain(3.0); send("STOP"); drain(2.0)
 disp = [l for l in got if l.startswith("DISPLAY\t")]

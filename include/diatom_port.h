@@ -43,7 +43,7 @@ typedef enum {
  * that straddles a source-pixel boundary, leaving every interior pixel exact.
  * At an integer factor it is identical to NEAREST by construction.
  *
- * LINEAR is plain bilinear (ADR-0050). The host asks for NEAREST in an
+ * LINEAR is plain bilinear (ADR-9001). The host asks for NEAREST in an
  * integer mode, whatever the filter setting, so that mode stays pixel exact.
  *
  * Passed per frame rather than set once, so the port holds no policy state and

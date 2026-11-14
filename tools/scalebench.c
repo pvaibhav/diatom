@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* What does the Flip's CPU scaling cost a frame (ADR-0050)?
+/* What does the Flip's CPU scaling cost a frame (ADR-9001)?
  *
  * Times port/miyoo_scale.c for the systems' frame sizes and the rects Aspect,
  * Stretch and Integer give on the Flip's 752x560 panel (src/scale.c, as
@@ -157,7 +157,7 @@ int main(int argc, char **argv)
 			for (int f = 0; f < 3; f++) {
 				diatom_scaler s;
 				/* Integer is drawn with nearest whatever the setting (main.c,
-				 * ADR-0050), so its other columns are what nearest costs. */
+				 * ADR-9001), so its other columns are what nearest costs. */
 				diatom_filter filter = MODE[m].m == DIATOM_SCALE_INTEGER ? DIATOM_FILTER_NEAREST : (diatom_filter)f;
 
 				memset(&s, 0, sizeof s);

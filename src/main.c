@@ -598,7 +598,7 @@ static bool filter_parse(const char *name, diatom_filter *out)
 static diatom_fill g_ds_fill;   /* defined with the DS layouts below */
 
 /* What present samples with: the setting, except that an integer mode is
- * whole pixels whatever it says (ADR-0050). */
+ * whole pixels whatever it says (ADR-9001). */
 static diatom_filter present_filter(void)
 {
 	diatom_scale_mode m = diatom_modes[g_mode].mode;
@@ -3199,7 +3199,7 @@ int main(int argc, char **argv)
 			 * 2026-10-25). Unknown or absent: the start mode, as before. */
 			for (int k = 0; m.dmode[0] && k < diatom_mode_count; k++)
 				if (!strcmp(diatom_modes[k].name, m.dmode)) { sn.mode = k; break; }
-			/* Its filter too (ADR-0050); unknown or absent, the start filter. */
+			/* Its filter too (ADR-9001); unknown or absent, the start filter. */
 			if (m.dfilter[0]) filter_parse(m.dfilter, &sn.filter);
 			/* Its fill the same way, for the same first frames; unknown or
 			 * absent keeps the last. */

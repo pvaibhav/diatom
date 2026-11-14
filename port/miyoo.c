@@ -4,7 +4,7 @@
  * Video: the core's frame is scaled and turned 180 degrees into the back page
  * of fb0 (752x560, 32-bit xRGB, three pages) and panned onto glass. The
  * vendor's blitter scales Soft and Crisp, after a CPU upscale for Crisp; the
- * CPU draws Integer (ADR-0050, choose_path below). No shaders - there is
+ * CPU draws Integer (ADR-9001, choose_path below). No shaders - there is
  * nothing to run them on; ADR-0041's chain carries the scanline filter
  * instead (plorpos-f1p.75), which the blitter draws.
  *
@@ -616,7 +616,7 @@ static bool     g_gfx;               /* defined with MI_GFX below */
 static diatom_pixfmt g_fmt;          /* the last frame's, for that line */
 static unsigned g_blit_fail;         /* blits that failed, the frame drawn on the CPU instead */
 
-/* How a frame reaches the page (ADR-0050). Chosen by choose_path whenever the
+/* How a frame reaches the page (ADR-9001). Chosen by choose_path whenever the
  * frame's size or format, the rect, the filter or the scanlines change. */
 typedef enum {
 	PATH_BLIT,    /* the frame as it is; the blitter scales it (Soft, scanlines) */
@@ -979,7 +979,7 @@ void diatom_port_content_fps(double fps)
 /* The hardware path: the core's frame copied into MMA memory (physically
  * contiguous, which the 2D engine needs), then one MI_GFX blit scales it,
  * converts it to xRGB and turns it 180 degrees into fb0's back page. It
- * always smooths when it scales; it has no nearest mode (ADR-0050). */
+ * always smooths when it scales; it has no nearest mode (ADR-9001). */
 static bool g_gfx;
 static unsigned long long g_src_phy;
 static void *g_src_virt;
@@ -1145,7 +1145,7 @@ static bool gfx_crisp(const void *src, int w, int h, size_t pitch, diatom_pixfmt
 	return gfx_blit(w * kx, h * ky, fmt, d, page, false);
 }
 
-/* The path for this geometry (ADR-0050):
+/* The path for this geometry (ADR-9001):
  *   scanlines on              the blitter, which draws them (any filter);
  *   NEAREST (Integer)         the CPU, so the pixels are exact;
  *   Crisp, whole factors      the CPU with nearest: nothing to scale down;

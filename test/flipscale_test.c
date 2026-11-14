@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* The Flip's CPU scaling (port/miyoo_scale.c, ADR-0050) against references
+/* The Flip's CPU scaling (port/miyoo_scale.c, ADR-9001) against references
  * written here from the definitions, not from the scaler's maps:
  *   nearest samples each output pixel's centre;
  *   Crisp is nearest up by ceil(scale) on each axis, then bilinear down,

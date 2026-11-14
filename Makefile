@@ -34,7 +34,7 @@ PORT_EXTRA_gkd   := port/gkd_gl.c
 PORT_EXTRA_brick := port/gkd_gl.c
 # The GL window while a shader is set, as the Brick (port/h700.c).
 PORT_EXTRA_h700  := port/gkd_gl.c
-# The Flip's CPU scaling (ADR-0050), its own file for the host test and scalebench.
+# The Flip's CPU scaling (ADR-9001), its own file for the host test and scalebench.
 PORT_EXTRA_miyoo := port/miyoo_scale.c
 # The Rotate is the GKD's session (sway, PipeWire): the same port file.
 PORT_SRC_rotate  := port/gkd.c
@@ -326,7 +326,7 @@ $(TOOLS_DIR)/shaderbench: tools/shaderbench.c port/gkd_gl.c port/gkd_gl.h
 	$(CC) $(TOOL_CFLAGS) -Iinclude -Iport $(filter -I% -D_%,$(CFLAGS)) -o $@ \
 		tools/shaderbench.c port/gkd_gl.c $(LDFLAGS)
 
-# What the Flip's CPU scaling costs a frame (ADR-0050). Host or Flip:
+# What the Flip's CPU scaling costs a frame (ADR-9001). Host or Flip:
 #   make scalebench
 #   docker run --rm -v "$$PWD:/work" -w /work miyoo-toolchain make PORT=miyoo scalebench
 # Static on the Flip, so the binary copied to the device needs nothing else.
@@ -486,7 +486,7 @@ $(BUILD)/dslayout-test: test/dslayout_test.c src/scale.c src/diatom.h
 	   -fno-sanitize-recover=all -o $@ test/dslayout_test.c src/scale.c
 .PHONY: check-dslayout
 
-# The Flip's CPU scaler and Crisp's upscale (ADR-0050) against references
+# The Flip's CPU scaler and Crisp's upscale (ADR-9001) against references
 # written from their definitions, NEON against plain C where the host has
 # NEON (arm64).
 # Host compiler.
