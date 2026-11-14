@@ -326,6 +326,19 @@ $(TOOLS_DIR)/shaderbench: tools/shaderbench.c port/gkd_gl.c port/gkd_gl.h
 	$(CC) $(TOOL_CFLAGS) -Iinclude -Iport $(filter -I% -D_%,$(CFLAGS)) -o $@ \
 		tools/shaderbench.c port/gkd_gl.c $(LDFLAGS)
 
+# What each of the Flip's filters costs a frame (ADR-0050). Host or Flip:
+#   make scalebench
+#   docker run --rm -v "$$PWD:/work" -w /work miyoo-toolchain make PORT=miyoo scalebench
+# Static on the Flip, so the binary copied to the device needs nothing else.
+# -O2 and the port's -m flags, as diatom itself is built.
+.PHONY: scalebench
+scalebench: $(TOOLS_DIR)/scalebench
+
+$(TOOLS_DIR)/scalebench: tools/scalebench.c port/miyoo_scale.c port/miyoo_scale.h src/scale.c
+	@mkdir -p $(TOOLS_DIR)
+	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 $(filter -m%,$(CFLAGS)) -Iinclude -Isrc -Iport \
+		-o $@ tools/scalebench.c port/miyoo_scale.c src/scale.c -lm $(if $(filter miyoo,$(PORT)),-static)
+
 # fbdev <-> EGL window, in one process, back and forth (plorpos-reo.4.1):
 #   tools/brick-make.sh glswitch
 .PHONY: glswitch
