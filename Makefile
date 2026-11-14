@@ -34,6 +34,8 @@ PORT_EXTRA_gkd   := port/gkd_gl.c
 PORT_EXTRA_brick := port/gkd_gl.c
 # The GL window while a shader is set, as the Brick (port/h700.c).
 PORT_EXTRA_h700  := port/gkd_gl.c
+# The Flip's CPU scaling (ADR-9001), its own file for the host test and scalebench.
+PORT_EXTRA_miyoo := port/miyoo_scale.c
 # The Rotate is the GKD's session (sway, PipeWire): the same port file.
 PORT_SRC_rotate  := port/gkd.c
 PORT_EXTRA_rotate := port/gkd_gl.c
@@ -324,6 +326,19 @@ $(TOOLS_DIR)/shaderbench: tools/shaderbench.c port/gkd_gl.c port/gkd_gl.h
 	$(CC) $(TOOL_CFLAGS) -Iinclude -Iport $(filter -I% -D_%,$(CFLAGS)) -o $@ \
 		tools/shaderbench.c port/gkd_gl.c $(LDFLAGS)
 
+# What the Flip's CPU scaling costs a frame (ADR-9001). Host or Flip:
+#   make scalebench
+#   docker run --rm -v "$$PWD:/work" -w /work miyoo-toolchain make PORT=miyoo scalebench
+# Static on the Flip, so the binary copied to the device needs nothing else.
+# -O2 and the port's -m flags, as diatom itself is built.
+.PHONY: scalebench
+scalebench: $(TOOLS_DIR)/scalebench
+
+$(TOOLS_DIR)/scalebench: tools/scalebench.c port/miyoo_scale.c port/miyoo_scale.h src/scale.c
+	@mkdir -p $(TOOLS_DIR)
+	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 $(filter -m%,$(CFLAGS)) -Iinclude -Isrc -Iport \
+		-o $@ tools/scalebench.c port/miyoo_scale.c src/scale.c -lm $(if $(filter miyoo,$(PORT)),-static)
+
 # fbdev <-> EGL window, in one process, back and forth (plorpos-reo.4.1):
 #   tools/brick-make.sh glswitch
 .PHONY: glswitch
@@ -388,7 +403,7 @@ $(BUILD)/%.o: %.c
 # fails when it is broken. check-seam has held since day one for exactly that
 # reason; the register drifted 418 -> 992 lines in three days because nothing
 # ever complained.
-check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options
+check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options check-flipscale
 
 # Does a RetroAchievements address reach the byte it names? Offline, needs no
 # core and no ROM, and links only cheevos.c plus the vendored runtime - so it
@@ -470,6 +485,19 @@ $(BUILD)/dslayout-test: test/dslayout_test.c src/scale.c src/diatom.h
 	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc $(SAN_AU) \
 	   -fno-sanitize-recover=all -o $@ test/dslayout_test.c src/scale.c
 .PHONY: check-dslayout
+
+# The Flip's CPU scaler and Crisp's upscale (ADR-9001) against references
+# written from their definitions, NEON against plain C where the host has
+# NEON (arm64).
+# Host compiler.
+check-flipscale: $(BUILD)/flipscale-test
+	@./$(BUILD)/flipscale-test
+
+$(BUILD)/flipscale-test: test/flipscale_test.c port/miyoo_scale.c port/miyoo_scale.h src/scale.c src/diatom.h
+	@mkdir -p $(BUILD)
+	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport $(SAN_AU) \
+	   -fno-sanitize-recover=all -o $@ test/flipscale_test.c port/miyoo_scale.c src/scale.c -lm
+.PHONY: check-flipscale
 
 # Deliberately NOT part of `check`. It needs a build and it runs in real time -
 # Diatom paces to the core's frame rate, so 300 frames costs five seconds of

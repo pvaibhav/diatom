@@ -3,6 +3,10 @@
 One decision per file. `NNNN-kebab-case-title.md`, numbered sequentially,
 never renumbered, never deleted.
 
+Records numbered 9001 and up belong to the pvaibhav fork. They start there so
+they cannot collide with the next upstream number. A record that goes
+upstream takes the next upstream number there.
+
 ## Why bother
 
 The expensive thing to lose is not *what* you decided - you can read that off
@@ -98,3 +102,4 @@ never started.
 | [0047](0047-the-microphone-is-the-ports.md) | The microphone is the port's, and the core opens it | Accepted |
 | [0048](0048-the-vsync-lock-is-not-on-by-default-beyond-pokedaisy.md) | The vsync lock is not on by default for cores other than PokeDaisy | Accepted (Flip: superseded by 0049) |
 | [0049](0049-the-flip-retimes-its-panel-and-locks-every-core.md) | On the Miyoo Mini Flip, retime the panel to the core and lock every core to it | Accepted |
+| [9001](9001-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md) | On the Miyoo Mini Flip, scale with the blitter, give Crisp a CPU upscale, and draw Integer on the CPU | Accepted |

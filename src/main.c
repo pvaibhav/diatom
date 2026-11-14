@@ -470,12 +470,12 @@ static char g_sfinal[16]   = "nearest";
 
 /* Per-combination measurement, so a mode that looks best can be checked
  * against what it costs. Printed on every change and again at exit. */
-#define SLOT(m, f) ((m) * 2 + (int)(f))
+#define SLOT(m, f) ((m) * 3 + (int)(f))
 static struct {
 	long     frames;
 	uint64_t present_us;
 	long     resyncs;
-} g_stat[32];
+} g_stat[16 * 3];   /* 16 modes or fewer (13 today), three filters */
 
 /* Called from inside retro_run. Copy and return; do not present here. */
 void diatom_on_video(const void *data, unsigned w, unsigned h, size_t pitch)
@@ -559,7 +559,7 @@ static void usage(void)
 	int i;
 	fprintf(stderr,
 		"usage: diatom --core <core.so> --rom <file> [--system <dir>] [--save <dir>]\n"
-		"              [--display <mode>] [--filter nearest|sharp]\n"
+		"              [--display <mode>] [--filter nearest|sharp|linear]\n"
 		"              [--shader <spec>]   as SETDISPLAY shader=, ADR-0041\n"
 		"              [--load-state <file>] [--state-on-exit <file>]\n"
 		"              [--firmware <name>]  required in --system, checked first\n"
@@ -584,9 +584,30 @@ static void usage(void)
 		        diatom_modes[i].name, diatom_modes[i].note);
 }
 
-static const char *filter_name(diatom_filter f)
+static const char *const FILTER_NAMES[] = { "nearest", "sharp", "linear" };   /* by diatom_filter */
+
+static const char *filter_name(diatom_filter f) { return FILTER_NAMES[f]; }
+
+static bool filter_parse(const char *name, diatom_filter *out)
 {
-	return f == DIATOM_FILTER_SHARP ? "sharp" : "nearest";
+	for (int i = 0; i < (int)(sizeof FILTER_NAMES / sizeof *FILTER_NAMES); i++)
+		if (!strcmp(name, FILTER_NAMES[i])) { *out = (diatom_filter)i; return true; }
+	return false;
+}
+
+static diatom_fill g_ds_fill;   /* defined with the DS layouts below */
+
+/* What present samples with: the setting, except that an integer mode is
+ * whole pixels whatever it says (ADR-9001). */
+static diatom_filter present_filter(void)
+{
+	diatom_scale_mode m = diatom_modes[g_mode].mode;
+
+	if (m == DIATOM_SCALE_INTEGER || m == DIATOM_SCALE_INTEGER_OVER) return DIATOM_FILTER_NEAREST;
+	/* One DS screen at a whole multiple (fill=integer) is an integer mode too. */
+	if ((m == DIATOM_SCALE_DS_TOP || m == DIATOM_SCALE_DS_BOTTOM) && g_ds_fill == DIATOM_FILL_INTEGER)
+		return DIATOM_FILTER_NEAREST;
+	return g_filter;
 }
 
 /* The DS's layouts in pairs, the top screen big then the bottom (TortOS plorpos-jcj): Screen Layout rounds the
@@ -791,7 +812,7 @@ static void present_frame(bool fresh)
 		}
 		if (g_canvas && g_canvas_mode == m)
 			diatom_port_present(fresh ? g_canvas : NULL, g_caps.surface_w, g_caps.surface_h,
-			                    (size_t)g_caps.surface_w * bpp, g_policy.pixfmt, g_dst, g_filter);
+			                    (size_t)g_caps.surface_w * bpp, g_policy.pixfmt, g_dst, present_filter());
 		return;
 	}
 	if ((m == DIATOM_SCALE_DS_TOP || m == DIATOM_SCALE_DS_BOTTOM)
@@ -804,7 +825,7 @@ static void present_frame(bool fresh)
 			}
 		}
 	}
-	diatom_port_present(src, g_frame_w, h, g_frame_pitch, g_policy.pixfmt, g_dst, g_filter);
+	diatom_port_present(src, g_frame_w, h, g_frame_pitch, g_policy.pixfmt, g_dst, present_filter());
 }
 static void apply_display(int mode, diatom_filter filter)
 {
@@ -1686,13 +1707,9 @@ static void display_set(const diatom_msg *m)
 		}
 		mode = i;
 	}
-	if (m->dfilter[0]) {
-		if      (!strcmp(m->dfilter, "nearest")) filter = DIATOM_FILTER_NEAREST;
-		else if (!strcmp(m->dfilter, "sharp"))   filter = DIATOM_FILTER_SHARP;
-		else {
-			diatom_proto_send("ERROR\tcode=bad_display\tmsg=%s", m->dfilter);
-			return;
-		}
+	if (m->dfilter[0] && !filter_parse(m->dfilter, &filter)) {
+		diatom_proto_send("ERROR\tcode=bad_display\tmsg=%s", m->dfilter);
+		return;
 	}
 	if (m->dfill[0] && !fill_parse(m->dfill, &fill)) {
 		diatom_proto_send("ERROR\tcode=bad_display\tmsg=%s", m->dfill);
@@ -2847,6 +2864,7 @@ static int run_session_inner(const diatom_session *sn)
 		for (i = 0; i < diatom_mode_count; i++) {
 			report_slot(i, DIATOM_FILTER_NEAREST);
 			report_slot(i, DIATOM_FILTER_SHARP);
+			report_slot(i, DIATOM_FILTER_LINEAR);
 		}
 		printf("diatom: audio dropped %llu frame(s)\n",
 		       (unsigned long long)diatom_audio_dropped());
@@ -3030,9 +3048,7 @@ int main(int argc, char **argv)
 		usage();
 		return 1;
 	}
-	if (!strcmp(filter, "sharp"))        start_filter = DIATOM_FILTER_SHARP;
-	else if (!strcmp(filter, "nearest")) start_filter = DIATOM_FILTER_NEAREST;
-	else {
+	if (!filter_parse(filter, &start_filter)) {
 		fprintf(stderr, "diatom: unknown filter '%s'\n", filter);
 		usage();
 		return 1;
@@ -3183,6 +3199,8 @@ int main(int argc, char **argv)
 			 * 2026-10-25). Unknown or absent: the start mode, as before. */
 			for (int k = 0; m.dmode[0] && k < diatom_mode_count; k++)
 				if (!strcmp(diatom_modes[k].name, m.dmode)) { sn.mode = k; break; }
+			/* Its filter too (ADR-9001); unknown or absent, the start filter. */
+			if (m.dfilter[0]) filter_parse(m.dfilter, &sn.filter);
 			/* Its fill the same way, for the same first frames; unknown or
 			 * absent keeps the last. */
 			{
