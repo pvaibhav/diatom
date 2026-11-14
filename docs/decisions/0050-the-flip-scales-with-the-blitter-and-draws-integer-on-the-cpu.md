@@ -55,7 +55,7 @@ Option C.
   | `NEAREST` (Integer) | the CPU scaler, nearest neighbour, straight into the page |
   | Crisp, rect a whole multiple of the frame on both axes | the CPU scaler, nearest neighbour: nothing to scale down |
   | Crisp | the upscale into the blitter's buffer, then the blitter scales it down |
-  | Crisp, upscale bigger than a panel page | as Soft, logged once per geometry |
+  | Crisp, upscale bigger than a panel page or wider or taller than the blitter takes (4095) | as Soft, logged once a game |
   | Soft | the blitter |
   | No blitter (`MI_GFX_Open` failed) | the CPU scaler with the filter asked for |
 

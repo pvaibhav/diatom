@@ -586,6 +586,7 @@ static void draw_bar(uint32_t *px, size_t pitch_px)
 
 static diatom_rect g_ov_drawn[3];
 static bool g_scan_drawn[3];        /* the page was last drawn with scanlines */
+static bool g_crisp_warned;         /* this game has logged that Crisp was too big */
 
 /* The flip thread: FBIOPAN_DISPLAY waits for vblank here (12.7 ms a frame
  * measured, TortOS plorpos-f1p.14), and waiting in present halved every
@@ -736,6 +737,7 @@ static uint64_t g_lk_grace_dr;   /* audio frames dropped in the grace: forgiven,
 /* The core's library_name, once per game as it loads. */
 void diatom_port_core_name(const char *name)
 {
+	g_crisp_warned = false;
 	g_lk_audio_off = false;
 	g_lk_off = 0;
 	g_lk_backoff = 600;
@@ -1155,6 +1157,9 @@ static bool gfx_crisp(const void *src, int w, int h, size_t pitch, diatom_pixfmt
  * at full screen, so Crisp never writes more than that a frame. The common
  * RGB565 frames fit: a 160x144 Game Boy at 5x4 is 900 KB, a 320x240
  * PlayStation frame at 3x3 1350 KB. A 640x480 frame at 2x2 (2400 KB) does not. */
+/* The blitter takes rectangles up to 4095 a side (the vendor's MI_GFX_Rect_t). */
+#define GFX_MAX_SIDE 0xFFF
+
 static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter, bool scan)
 {
 	if (g_path.w == w && g_path.h == h && g_path.fmt == fmt && g_path.filter == filter &&
@@ -1178,16 +1183,19 @@ static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom
 	} else if (filter == DIATOM_FILTER_SHARP && whole) {
 		g_path.cpu = DIATOM_FILTER_NEAREST;
 		snprintf(g_path.what, sizeof g_path.what, "Crisp/CPU %dx%d", kx, ky);
-	} else if (filter == DIATOM_FILTER_SHARP && bytes <= (uint64_t)g_var.xres * g_var.yres * 4) {
+	} else if (filter == DIATOM_FILTER_SHARP && bytes <= (uint64_t)g_var.xres * g_var.yres * 4 &&
+	           (int64_t)w * kx <= GFX_MAX_SIDE && (int64_t)h * ky <= GFX_MAX_SIDE) {
 		g_path.path = PATH_CRISP;
 		snprintf(g_path.what, sizeof g_path.what, "Crisp/upscale %dx%d", kx, ky);
 	} else {
 		g_path.path = PATH_BLIT;
 		snprintf(g_path.what, sizeof g_path.what,
 		         filter == DIATOM_FILTER_SHARP ? "Soft/hardware, Crisp too big" : "Soft/hardware");
-		if (filter == DIATOM_FILTER_SHARP)
+		if (filter == DIATOM_FILTER_SHARP && !g_crisp_warned) {
+			g_crisp_warned = true;      /* once a game: a core may alternate between two sizes */
 			fprintf(stderr, "[info] video: Crisp drawn as Soft for %dx%d to %dx%d, its %dx%d upscale would be %llu KB\n",
 			        w, h, dst.w, dst.h, kx, ky, (unsigned long long)bytes / 1024);
+		}
 	}
 }
 
@@ -1221,7 +1229,12 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 		drawn = gfx_frame(src, w, h, pitch, fmt, dst, back, scan);
 	else if (g_path.path == PATH_CRISP)
 		drawn = gfx_crisp(src, w, h, pitch, fmt, dst, back, g_path.kx, g_path.ky);
-	if (!drawn && g_path.path != PATH_CPU) g_blit_fail++;
+	if (!drawn && g_path.path != PATH_CPU) {
+		g_blit_fail++;
+		/* The CPU is about to fill the rows a scanline blit leaves dark: have
+		 * the next scanline frame on this page clear them. */
+		g_scan_drawn[back] = false;
+	}
 	if (!drawn && diatom_scaler_prepare(&g_scaler, w, h, dst, g_path.cpu, (int)g_var.xres, (int)g_var.yres))
 		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px);
 	t1 = diatom_port_now_us();

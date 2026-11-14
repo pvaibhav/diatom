@@ -364,17 +364,19 @@ static int widen16_neon(uint16_t *o, const uint16_t *in, int w, int k)
 	if (k == 2)
 		for (; x + 8 <= w; x += 8) {
 			uint16x8_t p = vld1q_u16(in + x);
-			vst2q_u16(o + 2 * x, (uint16x8x2_t){ { p, p } });
+			/* The extra parentheses: Clang defines these stores as macros, and the
+			 * literal's commas would split its arguments. */
+			vst2q_u16(o + 2 * x, ((uint16x8x2_t){ { p, p } }));
 		}
 	else if (k == 3)
 		for (; x + 8 <= w; x += 8) {
 			uint16x8_t p = vld1q_u16(in + x);
-			vst3q_u16(o + 3 * x, (uint16x8x3_t){ { p, p, p } });
+			vst3q_u16(o + 3 * x, ((uint16x8x3_t){ { p, p, p } }));
 		}
 	else if (k == 4)
 		for (; x + 8 <= w; x += 8) {
 			uint16x8_t p = vld1q_u16(in + x);
-			vst4q_u16(o + 4 * x, (uint16x8x4_t){ { p, p, p, p } });
+			vst4q_u16(o + 4 * x, ((uint16x8x4_t){ { p, p, p, p } }));
 		}
 	return x;
 }
@@ -386,17 +388,17 @@ static int widen32_neon(uint32_t *o, const uint32_t *in, int w, int k)
 	if (k == 2)
 		for (; x + 4 <= w; x += 4) {
 			uint32x4_t p = vld1q_u32(in + x);
-			vst2q_u32(o + 2 * x, (uint32x4x2_t){ { p, p } });
+			vst2q_u32(o + 2 * x, ((uint32x4x2_t){ { p, p } }));
 		}
 	else if (k == 3)
 		for (; x + 4 <= w; x += 4) {
 			uint32x4_t p = vld1q_u32(in + x);
-			vst3q_u32(o + 3 * x, (uint32x4x3_t){ { p, p, p } });
+			vst3q_u32(o + 3 * x, ((uint32x4x3_t){ { p, p, p } }));
 		}
 	else if (k == 4)
 		for (; x + 4 <= w; x += 4) {
 			uint32x4_t p = vld1q_u32(in + x);
-			vst4q_u32(o + 4 * x, (uint32x4x4_t){ { p, p, p, p } });
+			vst4q_u32(o + 4 * x, ((uint32x4x4_t){ { p, p, p, p } }));
 		}
 	return x;
 }
