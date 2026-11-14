@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: MIT */
-/* The Flip's CPU scaler (port/miyoo_scale.c, ADR-0050) against references
+/* The Flip's CPU scaling (port/miyoo_scale.c, ADR-0050) against references
  * written here from the definitions, not from the scaler's maps:
- *   Sharp is nearest, sampled at each output pixel's centre;
+ *   nearest samples each output pixel's centre;
  *   Crisp is nearest up by ceil(scale) on each axis, then bilinear down,
- *     within 1 per channel, and Sharp exactly at whole factors;
+ *     within 1 per channel, and nearest exactly at whole factors;
  *   Soft is bilinear, within 1 per channel;
  *   the picture lands turned 180 degrees, clipped, nothing written outside it;
- *   RGB565 converts as the port always has.
+ *   RGB565 converts as the port always has;
+ *   the whole-factor upscale repeats each source pixel kx by ky times, keeps
+ *     the pixel format bit for bit and writes nothing past a row.
  * Where the host has NEON (arm64) every case runs twice, NEON and plain C,
  * and the two must agree bit for bit. */
 #include <math.h>
@@ -137,7 +139,7 @@ static uint32_t *page(void)
 	return fb;
 }
 
-static uint32_t *draw(const image *im, diatom_rect d, diatom_filter f, bool plain, bool scan)
+static uint32_t *draw(const image *im, diatom_rect d, diatom_filter f, bool plain)
 {
 	diatom_scaler s;
 	uint32_t *fb = page();
@@ -149,7 +151,7 @@ static uint32_t *draw(const image *im, diatom_rect d, diatom_filter f, bool plai
 		diatom_scaler_free(&s);
 		return fb;
 	}
-	diatom_scaler_draw(&s, im->px, im->pitch, im->fmt, fb, FB_W, scan);
+	diatom_scaler_draw(&s, im->px, im->pitch, im->fmt, fb, FB_W);
 	diatom_scaler_free(&s);
 	return fb;
 }
@@ -178,7 +180,7 @@ static int compare(const uint32_t *fb, const uint32_t *ref, diatom_rect d, int t
 	return worst;
 }
 
-static const char *const NAME[] = { "sharp", "crisp", "soft" };
+static const char *const NAME[] = { "nearest", "crisp", "soft" };
 
 static void check_case(int w, int h, diatom_pixfmt fmt, diatom_rect d, const char *label)
 {
@@ -188,26 +190,60 @@ static void check_case(int w, int h, diatom_pixfmt fmt, diatom_rect d, const cha
 
 	for (int f = 0; f < 3; f++) {
 		uint32_t *ref = f == 0 ? ref_nearest(&im, d) : f == 1 ? ref_crisp(&im, d) : ref_soft(&im, d);
-		uint32_t *c = draw(&im, d, (diatom_filter)f, true, false);
+		uint32_t *c = draw(&im, d, (diatom_filter)f, true);
 
 		snprintf(what, sizeof what, "%s %dx%d %s -> %dx%d%+d%+d %s", label, w, h,
 		         fmt == DIATOM_PIX_RGB565 ? "rgb565" : "xrgb8888", d.w, d.h, d.x, d.y, NAME[f]);
 		compare(c, ref, d, f == 0 ? 0 : 1, what);
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 		{
-			uint32_t *n = draw(&im, d, (diatom_filter)f, false, false);
+			uint32_t *n = draw(&im, d, (diatom_filter)f, false);
 			CHECK(!memcmp(n, c, (size_t)FB_W * FB_H * 4), "%s: NEON and C differ", what);
 			free(n);
 		}
 #endif
 		if (f == 1 && integer) {
-			uint32_t *sharp = draw(&im, d, DIATOM_FILTER_NEAREST, true, false);
-			CHECK(!memcmp(sharp, c, (size_t)FB_W * FB_H * 4), "%s: Crisp is not Sharp at a whole factor", what);
-			free(sharp);
+			uint32_t *nearest = draw(&im, d, DIATOM_FILTER_NEAREST, true);
+			CHECK(!memcmp(nearest, c, (size_t)FB_W * FB_H * 4), "%s: Crisp is not nearest at a whole factor", what);
+			free(nearest);
 		}
 		free(ref);
 		free(c);
 	}
+	free_image(&im);
+}
+
+/* diatom_upscale of a w x h image by kx, ky into a buffer with padded rows,
+ * against src[y / ky][x / kx]; the padding must stay untouched. */
+static void check_upscale(int w, int h, diatom_pixfmt fmt, int kx, int ky)
+{
+	image im = make_image(w, h, fmt);
+	int bpp = fmt == DIATOM_PIX_RGB565 ? 2 : 4, u = w * kx, v = h * ky;
+	size_t row = (size_t)u * bpp, pitch = row + 12;
+	uint8_t *out[2], *line = malloc(row);
+
+	for (int plain = 0; plain < 2; plain++) {
+		int bad = 0, pad = 0;
+
+		out[plain] = malloc(pitch * v);
+		memset(out[plain], 0xA5, pitch * v);
+		diatom_upscale(im.px, w, h, im.pitch, fmt, kx, ky, out[plain], pitch, line, plain);
+		for (int y = 0; y < v; y++) {
+			const uint8_t *o = out[plain] + (size_t)y * pitch;
+			const uint8_t *in = (const uint8_t *)im.px + (size_t)(y / ky) * im.pitch;
+
+			for (int x = 0; x < u; x++) bad += memcmp(o + (size_t)x * bpp, in + (size_t)(x / kx) * bpp, bpp) != 0;
+			for (size_t k = row; k < pitch; k++) pad += o[k] != 0xA5;
+		}
+		CHECK(!bad && !pad, "upscale %dx%d %s by %dx%d, %s: %d pixels wrong, %d padding bytes written",
+		      w, h, fmt == DIATOM_PIX_RGB565 ? "rgb565" : "xrgb8888", kx, ky, plain ? "C" : "NEON", bad, pad);
+	}
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+	CHECK(!memcmp(out[0], out[1], pitch * v), "upscale %dx%d by %dx%d: NEON and C differ", w, h, kx, ky);
+#endif
+	free(out[0]);
+	free(out[1]);
+	free(line);
 	free_image(&im);
 }
 
@@ -252,7 +288,7 @@ int main(void)
 		/* 1x at an offset: source (x, y) is glass (W-1-(dx+x), H-1-(dy+y)). */
 		image im = make_image(5, 3, DIATOM_PIX_XRGB8888);
 		diatom_rect d = { 10, 20, 5, 3 };
-		uint32_t *fb = draw(&im, d, DIATOM_FILTER_NEAREST, true, false);
+		uint32_t *fb = draw(&im, d, DIATOM_FILTER_NEAREST, true);
 		int ok = 1;
 
 		for (int y = 0; y < 3; y++)
@@ -272,7 +308,7 @@ int main(void)
 
 		for (int i = 0; i < 65536; i++) ((uint16_t *)im.px)[i] = (uint16_t)i;
 		for (int plain = 0; plain < 2; plain++) {
-			uint32_t *fb = draw(&im, d, DIATOM_FILTER_NEAREST, plain, false);
+			uint32_t *fb = draw(&im, d, DIATOM_FILTER_NEAREST, plain);
 			for (int i = 0; i < 65536; i++) {
 				int x = i % 256, y = i / 256;
 				bad[plain] += fb[(FB_H - 1 - y) * FB_W + (FB_W - 1 - x)] != rgb565_ref((uint16_t)i);
@@ -283,26 +319,6 @@ int main(void)
 		for (int i = 0; i < 65536; i++) bad[0] += diatom_rgb565((uint16_t)i) != rgb565_ref((uint16_t)i);
 		CHECK(!bad[0], "diatom_rgb565 is the old rgb565");
 		free(im.px);
-	}
-
-	printf("flipscale: scanlines\n");
-	{
-		image im = make_image(160, 144, DIATOM_PIX_RGB565);
-		diatom_rect d = diatom_scale_rect(DIATOM_SCALE_INTEGER, 160, 144, 0, FB_W, FB_H);
-		uint32_t *plain = draw(&im, d, DIATOM_FILTER_NEAREST, true, false);
-		uint32_t *scan = draw(&im, d, DIATOM_FILTER_NEAREST, true, true);
-		int top = FB_H - d.y - d.h, ok = 1;
-
-		for (int fy = top; fy < top + d.h; fy++) {
-			const uint32_t *a = plain + fy * FB_W, *b = scan + fy * FB_W;
-			bool dark = (fy - top) % 3 == 2;
-
-			for (int fx = 0; fx < FB_W; fx++) ok &= dark ? b[fx] == SENTINEL : b[fx] == a[fx];
-		}
-		CHECK(ok, "every third row of the rect left alone, the others as without");
-		free(plain);
-		free(scan);
-		free_image(&im);
 	}
 
 	printf("flipscale: rects off the panel, frames too big, one scaler reused\n");
@@ -318,7 +334,7 @@ int main(void)
 		memset(&s, 0, sizeof s);
 		for (size_t i = 0; i < sizeof OFF / sizeof *OFF; i++) {
 			diatom_scaler_prepare(&s, im.w, im.h, OFF[i], DIATOM_FILTER_SHARP, FB_W, FB_H);
-			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W, false);
+			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W);
 		}
 		for (int i = 0; i < FB_W * FB_H; i++) clean &= fb[i] == SENTINEL;
 		CHECK(clean, "a rect wholly off the panel draws nothing");
@@ -331,14 +347,14 @@ int main(void)
 		 * that changes resolution does: the second draw matches a fresh one. */
 		{
 			diatom_rect d = { 0, 29, 752, 501 };
-			uint32_t *fresh = draw(&big, d, DIATOM_FILTER_LINEAR, false, false), *again = page();
+			uint32_t *fresh = draw(&big, d, DIATOM_FILTER_LINEAR, false), *again = page();
 			bool same = true;
 
 			CHECK(diatom_scaler_prepare(&s, im.w, im.h, (diatom_rect){ 100, 50, 23, 17 }, DIATOM_FILTER_SHARP, FB_W, FB_H),
 			      "prepare after a refusal");
-			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W, false);
+			diatom_scaler_draw(&s, im.px, im.pitch, im.fmt, fb, FB_W);
 			CHECK(diatom_scaler_prepare(&s, big.w, big.h, d, DIATOM_FILTER_LINEAR, FB_W, FB_H), "prepare for the new size");
-			diatom_scaler_draw(&s, big.px, big.pitch, big.fmt, again, FB_W, false);
+			diatom_scaler_draw(&s, big.px, big.pitch, big.fmt, again, FB_W);
 			for (int i = 0; i < FB_W * FB_H; i++) same &= again[i] == fresh[i];
 			CHECK(same, "a reused scaler draws what a fresh one does");
 			free(fresh);
@@ -348,6 +364,20 @@ int main(void)
 		free(fb);
 		free_image(&im);
 		free_image(&big);
+	}
+
+	printf("flipscale: whole-factor upscale\n");
+	{
+		/* Widths below, at and past a NEON vector (8 RGB565, 4 xRGB pixels),
+		 * odd ones with a tail, and the Game Boy's. */
+		static const struct { int w, h; } SIZE[] = { { 1, 1 }, { 3, 2 }, { 7, 5 }, { 8, 3 }, { 13, 11 }, { 37, 4 }, { 160, 9 } };
+
+		for (size_t i = 0; i < sizeof SIZE / sizeof *SIZE; i++)
+			for (int kx = 1; kx <= 5; kx++)
+				for (int ky = 1; ky <= 5; ky++) {
+					check_upscale(SIZE[i].w, SIZE[i].h, DIATOM_PIX_RGB565, kx, ky);
+					check_upscale(SIZE[i].w, SIZE[i].h, DIATOM_PIX_XRGB8888, kx, ky);
+				}
 	}
 
 	if (failures) { printf("flipscale: %d FAILED\n", failures); return 1; }

@@ -130,7 +130,6 @@ bool diatom_scaler_prepare(diatom_scaler *s, int src_w, int src_h, diatom_rect d
 	}
 	s->fb_x     = fb_w - dst.x - x1;
 	s->fb_y     = fb_h - 1 - (dst.y + y0);
-	s->scan_top = fb_h - dst.y - dst.h;
 
 	s->src_w = src_w; s->src_h = src_h; s->dst = dst; s->filter = filter;
 	s->fb_w = fb_w; s->fb_h = fb_h;
@@ -318,7 +317,7 @@ static void make_row(diatom_scaler *s, const void *src, size_t pitch, diatom_pix
 }
 
 void diatom_scaler_draw(diatom_scaler *s, const void *src, size_t pitch, diatom_pixfmt fmt,
-                        uint32_t *fb, size_t fb_pitch, bool scan)
+                        uint32_t *fb, size_t fb_pitch)
 {
 	int last_r = -1, last_w = -1;
 
@@ -328,13 +327,118 @@ void diatom_scaler_draw(diatom_scaler *s, const void *src, size_t pitch, diatom_
 		uint32_t *row = fb + (size_t)(s->fb_y - j) * fb_pitch + (size_t)s->fb_x;
 		int r = s->ridx[j], w = s->rw[j];
 
-		/* The scanline filter's dark rows: every third fb row of the rect. */
-		if (scan && (s->fb_y - j - s->scan_top) % 3 == 2) continue;
 		if (r != last_r || w != last_w) {
 			make_row(s, src, pitch, fmt, r, w);
 			last_r = r;
 			last_w = w;
 		}
 		memcpy(row, s->out, (size_t)s->n * 4);
+	}
+}
+
+/* ---------- whole-factor upscale, Crisp's first step ------------------------ */
+
+/* Source pixels [from, w) of a row, each written k times. */
+static void widen16_c(uint16_t *o, const uint16_t *in, int from, int w, int k)
+{
+	o += (size_t)from * k;
+	for (int x = from; x < w; x++)
+		for (int j = 0; j < k; j++) *o++ = in[x];
+}
+
+static void widen32_c(uint32_t *o, const uint32_t *in, int from, int w, int k)
+{
+	o += (size_t)from * k;
+	for (int x = from; x < w; x++)
+		for (int j = 0; j < k; j++) *o++ = in[x];
+}
+
+#ifdef SCALER_NEON
+/* VST2/3/4 of one register k times interleaves each lane with itself: k
+ * copies of every pixel in a row. Factors over 4 are left to the C loop.
+ * Returns how many source pixels were done. */
+static int widen16_neon(uint16_t *o, const uint16_t *in, int w, int k)
+{
+	int x = 0;
+
+	if (k == 2)
+		for (; x + 8 <= w; x += 8) {
+			uint16x8_t p = vld1q_u16(in + x);
+			vst2q_u16(o + 2 * x, (uint16x8x2_t){ { p, p } });
+		}
+	else if (k == 3)
+		for (; x + 8 <= w; x += 8) {
+			uint16x8_t p = vld1q_u16(in + x);
+			vst3q_u16(o + 3 * x, (uint16x8x3_t){ { p, p, p } });
+		}
+	else if (k == 4)
+		for (; x + 8 <= w; x += 8) {
+			uint16x8_t p = vld1q_u16(in + x);
+			vst4q_u16(o + 4 * x, (uint16x8x4_t){ { p, p, p, p } });
+		}
+	return x;
+}
+
+static int widen32_neon(uint32_t *o, const uint32_t *in, int w, int k)
+{
+	int x = 0;
+
+	if (k == 2)
+		for (; x + 4 <= w; x += 4) {
+			uint32x4_t p = vld1q_u32(in + x);
+			vst2q_u32(o + 2 * x, (uint32x4x2_t){ { p, p } });
+		}
+	else if (k == 3)
+		for (; x + 4 <= w; x += 4) {
+			uint32x4_t p = vld1q_u32(in + x);
+			vst3q_u32(o + 3 * x, (uint32x4x3_t){ { p, p, p } });
+		}
+	else if (k == 4)
+		for (; x + 4 <= w; x += 4) {
+			uint32x4_t p = vld1q_u32(in + x);
+			vst4q_u32(o + 4 * x, (uint32x4x4_t){ { p, p, p, p } });
+		}
+	return x;
+}
+#endif
+
+static void widen(void *o, const void *in, int w, int k, diatom_pixfmt fmt, bool plain)
+{
+	int done = 0;
+
+	(void)plain;   /* without NEON there is only the C loop */
+
+	if (fmt == DIATOM_PIX_RGB565) {
+#ifdef SCALER_NEON
+		if (!plain) done = widen16_neon(o, in, w, k);
+#endif
+		widen16_c(o, in, done, w, k);
+	} else {
+#ifdef SCALER_NEON
+		if (!plain) done = widen32_neon(o, in, w, k);
+#endif
+		widen32_c(o, in, done, w, k);
+	}
+}
+
+void diatom_upscale(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
+                    int kx, int ky, void *dst, size_t dst_pitch, void *line, bool plain)
+{
+	size_t row = (size_t)w * (size_t)kx * (fmt == DIATOM_PIX_RGB565 ? 2 : 4);
+	uint8_t *out = dst;
+
+	for (int y = 0; y < h; y++) {
+		const uint8_t *in = (const uint8_t *)src + (size_t)y * pitch;
+
+		if (ky == 1 && kx > 1) {            /* one copy: widen straight into dst */
+			widen(out, in, w, kx, fmt, plain);
+			out += dst_pitch;
+			continue;
+		}
+		if (kx > 1) {
+			widen(line, in, w, kx, fmt, plain);
+			in = line;
+		}
+		for (int j = 0; j < ky; j++, out += dst_pitch) memcpy(out, in, row);
 	}
 }

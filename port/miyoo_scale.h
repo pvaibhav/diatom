@@ -1,16 +1,19 @@
 /* SPDX-License-Identifier: MIT */
-/* The Flip's CPU scaler (TortOS plorpos-f1p, ADR-0050): a core's frame scaled
- * into a page of fb0, turned 180 degrees because the panel is mounted upside
- * down. Its own file so the host tests (test/flipscale_test.c) and the
- * benchmark (tools/scalebench.c) run the code the device runs, with no
- * framebuffer and no vendor library.
+/* The Flip's CPU scaling (TortOS plorpos-f1p, ADR-0050). Its own file so the
+ * host tests (test/flipscale_test.c) and the benchmark (tools/scalebench.c)
+ * run the code the device runs, with no framebuffer and no vendor library.
  *
- * Filters, by the port interface's names:
- *   NEAREST  "Sharp": nearest neighbour.
- *   SHARP    "Crisp": nearest up to the next whole factor, then bilinear down
+ * diatom_upscale is Crisp's first step: the frame made bigger by whole
+ * factors, for the blitter to scale down.
+ *
+ * diatom_scaler draws a frame into a page of fb0, turned 180 degrees because
+ * the panel is mounted upside down. The port uses it for Integer, and for
+ * every filter when the blitter is missing or fails. Filters, by the port
+ * interface's names:
+ *   NEAREST  nearest neighbour; what Integer asks for.
+ *   SHARP    Crisp: nearest up to the next whole factor, then bilinear down
  *            to the rect. Equal to NEAREST at a whole factor.
- *   LINEAR   "Soft": bilinear.
- *
+ *   LINEAR   Soft: bilinear.
  * All the arithmetic per geometry (maps, weights) happens in
  * diatom_scaler_prepare; drawing a frame does no allocation and no division. */
 #ifndef DIATOM_MIYOO_SCALE_H
@@ -34,7 +37,6 @@ typedef struct {
 	 * which is the rightmost visible logical column. */
 	int       n, rows;
 	int       fb_x, fb_y;     /* fb memory column of column 0; fb row of visible logical row 0 */
-	int       scan_top;       /* fb row where dst's turned rect starts: scanline phase */
 	uint16_t *cidx;           /* source column per output column */
 	uint8_t  *cw4;            /* its weight towards cidx + 1, 0..255, repeated per byte */
 	int16_t  *ridx;           /* source row per visible output row */
@@ -56,12 +58,20 @@ bool diatom_scaler_prepare(diatom_scaler *s, int src_w, int src_h, diatom_rect d
                            diatom_filter filter, int fb_w, int fb_h);
 
 /* Draw one frame. `fb` is the page's first pixel, `fb_pitch` its row length
- * in pixels. With `scan`, every third fb row of the rect (the scanline
- * filter's dark rows) is skipped: the caller cleared it with the page. */
+ * in pixels. */
 void diatom_scaler_draw(diatom_scaler *s, const void *src, size_t pitch, diatom_pixfmt fmt,
-                        uint32_t *fb, size_t fb_pitch, bool scan);
+                        uint32_t *fb, size_t fb_pitch);
 
 void diatom_scaler_free(diatom_scaler *s);
+
+/* The w x h frame scaled up kx times across and ky times down with nearest
+ * neighbour, in its own pixel format, into `dst`: kx*w by ky*h pixels, rows
+ * `dst_pitch` bytes apart. Each source row is widened once, into `line`
+ * (scratch of kx*w pixels, unused when kx or ky is 1), and copied ky times.
+ * `dst` is only written, never read. `plain` takes the C loops where NEON is
+ * built, for the tests. */
+void diatom_upscale(const void *src, int w, int h, size_t pitch, diatom_pixfmt fmt,
+                    int kx, int ky, void *dst, size_t dst_pitch, void *line, bool plain);
 
 /* RGB565 to xRGB with the top bits repeated into the bottom, so white is
  * 0xFFFFFFFF, not 0xFFF8FCF8. */

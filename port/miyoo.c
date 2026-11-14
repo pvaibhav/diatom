@@ -1115,7 +1115,7 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 
 	if ((!g_gfx || !gfx_present(src, w, h, pitch, fmt, dst, back)) &&
 	    diatom_scaler_prepare(&g_scaler, w, h, dst, filter, (int)g_var.xres, (int)g_var.yres))
-		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px, scan);
+		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px);
 	t1 = diatom_port_now_us();
 	if (g_ov && diatom_port_now_us() < g_ov_until) {
 		draw_overlay(px, pitch_px);
