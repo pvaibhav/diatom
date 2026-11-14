@@ -897,11 +897,10 @@ Two levers the spike discovered:
       core's fps and every core locks, standing down by itself if it slips or
       drops audio (plorpos-f1p.68).
 - [x] **[OPEN]** **The Flip's picture is soft in every mode, Integer too** →
-      **[ADR-0050](decisions/0050-the-flip-scales-on-the-cpu-with-three-filters.md)**
-      *(Accepted)*. The vendor blitter smooths whenever it scales and cannot be
-      told not to. The port scales on the CPU, with Sharp, Crisp and Soft, and
-      Integer is whole pixels on every port. `tools/scalebench` measures the
-      cost on the device.
+      **[ADR-0050](decisions/0050-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md)**
+      *(Accepted)*. The blitter always smooths. Soft is the blitter alone, Crisp
+      a CPU upscale by whole factors that it scales down, and Integer is drawn
+      on the CPU, whole pixels on every port. `tools/scalebench` times the CPU.
 - [x] **[OPEN]** **The end-of-session fps line counted menu time as slow
       frames.** `t_start` was set once at load and never rebased, so the rate
       was frames over wall clock. Pacing already rebased `next_us` on resume for

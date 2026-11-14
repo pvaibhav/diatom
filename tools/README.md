@@ -151,17 +151,25 @@ tools/brick-run.sh --core X.so --rom game --frames 600 --shot /tmp/x.bmp
 
 Set `LD_LIBRARY_PATH` if the cores need runtime libraries beside them.
 
-## `scalebench.c` - what each of the Flip's filters costs
+## `scalebench.c` - what the Flip's CPU scaling costs
 
-*How many ms a frame does each filter of the Flip's CPU scaler take
-([ADR-0050](../docs/decisions/0050-the-flip-scales-on-the-cpu-with-three-filters.md))?*
+*How many ms a frame does the Flip's CPU scaling take
+([ADR-0050](../docs/decisions/0050-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md))?*
 
 Times `port/miyoo_scale.c` for five frame sizes (Game Boy, GBA, SNES, a 256x240
-XRGB8888 frame, Genesis) into the rects that Aspect, Stretch and Integer give on
+XRGB8888 frame, Genesis) and the rects that Aspect, Stretch and Integer give on
 the 752x560 panel (computed by `src/scale.c`, as diatom computes them). Prints the
-median and worst ms a frame. It writes to malloc'd memory by default. With `--fb`
-it writes to a page of `/dev/fb0` that is not on screen, which is where diatom
-writes. `--plain` times the plain C loops, and `--scan` times the scanline filter.
+median and worst ms a frame for:
+
+- the CPU scaler with each filter. diatom uses it for Integer and for Crisp at
+  whole factors, both nearest, and for Crisp and Soft only when the blitter is
+  missing. It writes to malloc'd memory by default. With `--fb` it writes to a
+  page of `/dev/fb0` that is not on screen, which is where diatom writes.
+- Crisp's upscale, into malloc'd memory. The hardware blit that scales it down
+  is not included. "big" marks an upscale over the size limit, which diatom
+  draws as Soft.
+
+`--plain` times the plain C loops instead of NEON.
 
     docker run --rm -v "$PWD:/work" -w /work miyoo-toolchain make PORT=miyoo scalebench
     scp build/miyoo/tools/scalebench root@<flip>:/tmp/ && ssh root@<flip> /tmp/scalebench --fb
