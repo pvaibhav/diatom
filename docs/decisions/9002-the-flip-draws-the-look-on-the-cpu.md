@@ -81,7 +81,9 @@ Option C, picked by names in the existing chain.
   panel colour with the lens over it, turned) and as spans of the lens pixels with alpha over the picture, and moves
   the picture to `x,y`. The page is copied wherever the port would otherwise clear one; the spans are blended after
   each frame's picture. No image for the size, or a file over 4 MB or whose PNG header is not 752x560 (both checked
-  before anything is decoded), or one that will not decode: Retro without a bezel, said once in the log at info.
+  on the bytes handed to the decoder, before it runs), or one that will not decode or whose decode asks for more than
+  8 MiB at once (`vendor/stb/stb_image.c`; no 752x560 PNG of 4 MB needs more): Retro without a bezel, said once in the
+  log at info.
 - `tools/lookshot` runs the same file on a PNG frame and writes the page, to compare with the mock-ups the launcher's
   design was approved on. `make check-fliplook` checks every renderer against per-pixel references written from the
   definitions above.
