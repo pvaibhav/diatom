@@ -276,7 +276,7 @@ static uint32_t ref_dots(const diatom_look_dots *d, const image *im, int sx, int
 #define INK(x, y) ((x) < 0 || (y) < 0 ? 0.0 : ref_ink(d, 1 - SH(x, y) / 3.0))
 	double self = INK(sx, sy), a;
 	double fx = (kx + 0.5) / lx, fy = (ky + 0.5) / ly;
-	double wself_x = fx < 0.5 ? 0.5 - fx : 0, wself_y = fy > 0.5 ? fy - 0.5 : 0;
+	double wself_x = 1 - fx, wself_y = fy;
 	double gs = 1 - SH(sx, sy) / 3.0, gr = 1 - SH(sx + 1, sy) / 3.0;
 	double gu = 1 - SH(sx, sy - 1) / 3.0, gur = 1 - SH(sx + 1, sy - 1) / 3.0;
 	double grey = wself_y * (wself_x * gs + (1 - wself_x) * gr) + (1 - wself_y) * (wself_x * gu + (1 - wself_x) * gur);
@@ -287,7 +287,7 @@ static uint32_t ref_dots(const diatom_look_dots *d, const image *im, int sx, int
 	else if (kx == 0) a = 0.38 * (self + INK(sx - 1, sy));
 	else if (ky == 0) a = 0.38 * (self + INK(sx, sy - 1));
 	else a = self;
-	shadow = fmin(ref_ink(d, grey) * d->contrast * d->shadow_opacity * 0.45 * (1 - 0.75 * a), 1.0);
+	shadow = fmin(ref_ink(d, grey) * d->contrast * d->shadow_opacity * 0.30 * (1 - 0.75 * a), 1.0);
 	for (int c = 0; c < 3; c++) {
 		double v = d->ink[c] / 255.0 * a * (1 - d->contrast * a * a) +
 		           d->panel[c] / 255.0 * (1 - shadow) * (d->screen_light - d->contrast * d->pixel_opacity * a);
@@ -521,13 +521,13 @@ int main(void)
 			((uint32_t *)((uint8_t *)black.px + y * black.pitch))[x] = 0x000000;
 		}
 		/* dots-dmg, all white, 3x: a cell pixel has the white dot's ink, 0.05,
-		 * and its shadow 0.05 * 0.7 * 0.9 * 0.45 * (1 - 0.75 * 0.05);
-		 * R 161 * (1 - 0.01364) * (0.85 - 0.63 * 0.05) = 129.98,
-		 * G 90 * 0.05 * (1 - 0.7 * 0.0025) + the same = 134.47, B 170 * 0.04991 = 8.49.
-		 * A crossing has no ink: R 161 * (1 - 0.014175) * 0.85 = 134.91, B 0. */
+		 * and its shadow 0.05 * 0.7 * 0.9 * 0.30 * (1 - 0.75 * 0.05);
+		 * R 161 * (1 - 0.00910) * (0.85 - 0.63 * 0.05) = 130.58,
+		 * G 90 * 0.05 * (1 - 0.7 * 0.0025) + the same = 135.07, B 170 * 0.04991 = 8.49.
+		 * A crossing has no ink: R 161 * (1 - 0.00945) * 0.85 = 135.56, B 0. */
 		fb = draw(screen("dots-dmg"), &white, d);
-		CHECK(at(fb, d, 4, 4) == 0x828608, "dots-dmg white cell %06x, by hand 828608", (unsigned)at(fb, d, 4, 4));
-		CHECK(at(fb, d, 3, 3) == 0x878700, "dots-dmg white crossing %06x, by hand 878700", (unsigned)at(fb, d, 3, 3));
+		CHECK(at(fb, d, 4, 4) == 0x838708, "dots-dmg white cell %06x, by hand 838708", (unsigned)at(fb, d, 4, 4));
+		CHECK(at(fb, d, 3, 3) == 0x888800, "dots-dmg white crossing %06x, by hand 888800", (unsigned)at(fb, d, 3, 3));
 		free(fb);
 		/* grid-gbc: white is the panel, (35*96 + 255*159 + 127)/255 = 172,
 		 * (80*96 + 255*159 + 127)/255 = 189, (41*96 + 255*159 + 127)/255 = 174;

@@ -7,7 +7,7 @@
 #include "miyoo_look.h"
 
 #define DOT_GAP    0.38     /* share of each neighbour's ink a gap between dots takes */
-#define DOT_SHADOW 0.45     /* share of a dot's ink its shadow carries */
+#define DOT_SHADOW 0.30     /* share of a dot's ink its shadow carries */
 
 #define XRGB(r, g, b) (0xFF000000u | (uint32_t)(r) << 16 | (uint32_t)(g) << 8 | (uint32_t)(b))
 
@@ -93,10 +93,10 @@ static double ink_of(const diatom_look_dots *d, int shade) { return ink_of_grey(
 
 /* Panel pixel (k, r) of a cell lx by ly, k and r counted from its top-left,
  * for the neighbourhood `key`. A cell on the picture's left or top edge has
- * no neighbour for its gap to take ink from. The shadow samples grey one game
- * pixel right and up, bilinearly: only self, right, up and up-right, the
- * texels beyond them folded into the nearest, and the weights from the panel
- * pixel's centre in its cell. */
+ * no neighbour for its gap to take ink from. The shadow samples grey half a
+ * game pixel right and up, bilinearly, so it ramps across the cell from this
+ * dot's shade to its neighbours': at three or four panel pixels a cell, a
+ * whole pixel's offset left a hard-edged copy of the dot, not a shadow. */
 static uint32_t dots_pixel(const diatom_look_dots *d, unsigned key, int k, int lx, bool x_edge,
                            int r, int ly, bool y_edge)
 {
@@ -108,8 +108,8 @@ static uint32_t dots_pixel(const diatom_look_dots *d, unsigned key, int k, int l
 	else if (k == 0) a = DOT_GAP * (ink_of(d, self) + (x_edge ? 0.0 : ink_of(d, left)));
 	else if (r == 0) a = DOT_GAP * (ink_of(d, self) + (y_edge ? 0.0 : ink_of(d, up)));
 	else a = ink_of(d, self);
-	wx = fx < 0.5 ? 0.5 - fx : 0.0;
-	wy = fy > 0.5 ? fy - 0.5 : 0.0;
+	wx = 1.0 - fx;
+	wy = fy;
 	grey = 1.0 - (wy * (wx * self + (1 - wx) * right) + (1 - wy) * (wx * up + (1 - wx) * ur)) / 3.0;
 	shadow = ink_of_grey(d, grey) * d->contrast * d->shadow_opacity * DOT_SHADOW * (1.0 - 0.75 * a);
 	if (shadow > 1.0) shadow = 1.0;
