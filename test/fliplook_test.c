@@ -109,20 +109,23 @@ static void place(int x, int n_src, int n_dst, int *k, int *len)
 static int ch(uint32_t p, int c) { return p >> (16 - 8 * c) & 255; }
 
 /* A file of `size` bytes in `path` that starts with a PNG signature and an
- * IHDR for w x h, and nothing a decoder could use after it. `chunk` is the
- * first chunk's type. */
-static bool header_file(const char *path, const char *chunk, uint32_t w, uint32_t h, long size)
+ * IHDR for w x h RGBA of `depth` bits, and nothing a decoder could use after
+ * it. `chunk` is the first chunk's type. */
+static bool header_file(const char *path, const char *chunk, uint32_t w, uint32_t h, int depth, long size)
 {
-	uint8_t head[24] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13 };
+	uint8_t head[26] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13 };
+	size_t n = size < (long)sizeof head ? (size_t)size : sizeof head;
 	FILE *f = fopen(path, "wb");
 	bool ok;
 
 	memcpy(head + 12, chunk, 4);
 	for (int i = 0; i < 4; i++) { head[16 + i] = (uint8_t)(w >> (24 - 8 * i)); head[20 + i] = (uint8_t)(h >> (24 - 8 * i)); }
+	head[24] = (uint8_t)depth;
+	head[25] = 6;
 	if (!f) return false;
-	ok = fwrite(head, 1, size < 24 ? (size_t)size : sizeof head, f) == (size < 24 ? (size_t)size : sizeof head);
+	ok = fwrite(head, 1, n, f) == n;
 	ok &= fclose(f) == 0;
-	return ok && (size <= 24 || truncate(path, size) == 0);
+	return ok && (size <= (long)sizeof head || truncate(path, size) == 0);
 }
 
 /* ---- PNGs written by hand, for the decoder ---- */
@@ -617,14 +620,17 @@ int main(void)
 
 	printf("fliplook: bezel files\n");
 	{
-		static const struct { const char *what, *chunk; uint32_t w, h; long size; const char *why; } FILES[] = {
-			{ "an 8192x8192 PNG of 261 KB", "IHDR", 8192, 8192, 261 * 1024, "not the panel's size" },
-			{ "a 640x480 PNG", "IHDR", 640, 480, 4096, "not the panel's size" },
-			{ "a 752x560 PNG over 4 MB", "IHDR", FB_W, FB_H, DIATOM_BEZEL_FILE_MAX + 1, "larger than 4 MB" },
-			{ "a PNG whose first chunk is not IHDR", "CgBI", FB_W, FB_H, 4096, "not a PNG" },
-			{ "a file shorter than a PNG header", "IHDR", FB_W, FB_H, 20, "not a PNG" },
-			{ "a 752x560 PNG", "IHDR", FB_W, FB_H, 4096, NULL },
-			{ "a 752x560 PNG of exactly 4 MB", "IHDR", FB_W, FB_H, DIATOM_BEZEL_FILE_MAX, NULL },
+		static const struct { const char *what, *chunk; uint32_t w, h; int depth; long size; const char *why; } FILES[] = {
+			{ "an 8192x8192 PNG of 261 KB", "IHDR", 8192, 8192, 8, 261 * 1024, "not the panel's size" },
+			{ "a 640x480 PNG", "IHDR", 640, 480, 8, 4096, "not the panel's size" },
+			{ "a 752x560 PNG over 4 MB", "IHDR", FB_W, FB_H, 8, DIATOM_BEZEL_FILE_MAX + 1, "larger than 4 MB" },
+			{ "a PNG whose first chunk is not IHDR", "CgBI", FB_W, FB_H, 8, 4096, "not a PNG" },
+			{ "a file shorter than a PNG header", "IHDR", FB_W, FB_H, 8, 20, "not a PNG" },
+			{ "a file that ends before IHDR's bit depth", "IHDR", FB_W, FB_H, 8, 24, "not a PNG" },
+			{ "a 752x560 16-bit PNG", "IHDR", FB_W, FB_H, 16, 4096, "not 8 bits deep" },
+			{ "a 752x560 4-bit PNG", "IHDR", FB_W, FB_H, 4, 4096, "not 8 bits deep" },
+			{ "a 752x560 PNG", "IHDR", FB_W, FB_H, 8, 4096, NULL },
+			{ "a 752x560 PNG of exactly 4 MB", "IHDR", FB_W, FB_H, 8, DIATOM_BEZEL_FILE_MAX, NULL },
 		};
 		const char *tmp = getenv("TMPDIR");
 		char path[512];
@@ -641,7 +647,7 @@ int main(void)
 			size_t len = 0;
 			uint8_t *png;
 
-			CHECK(header_file(path, FILES[i].chunk, FILES[i].w, FILES[i].h, FILES[i].size), "%s: written", FILES[i].what);
+			CHECK(header_file(path, FILES[i].chunk, FILES[i].w, FILES[i].h, FILES[i].depth, FILES[i].size), "%s: written", FILES[i].what);
 			png = diatom_bezel_read(path, FB_W, FB_H, &len, &why);
 			if (FILES[i].why)
 				CHECK(!png && why && !strcmp(why, FILES[i].why), "%s: refused as %s, got %s", FILES[i].what, FILES[i].why,
@@ -736,8 +742,9 @@ int main(void)
 				free(b.p); free(rgba);
 			}
 
-			/* 16-bit RGBA, Adam7, stored: the most a real bezel asks for,
-			 * the inflated passes running past stb's guess. */
+			/* 8-bit RGBA, Adam7, stored: the scanlines a bezel can need,
+			 * its passes' 1050 filter bytes running past the 560 of stb's
+			 * guess and doubling its output (vendor/stb/stb_image.c). */
 			{
 				static const int P[7][4] = { { 0, 0, 8, 8 }, { 4, 0, 8, 8 }, { 0, 4, 4, 8 }, { 2, 0, 4, 4 },
 				                             { 0, 2, 2, 4 }, { 1, 0, 2, 2 }, { 0, 1, 1, 2 } };
@@ -749,23 +756,21 @@ int main(void)
 						if (P[p][0] >= FB_W) break;
 						put8(&raw, 0);
 						for (int x = P[p][0]; x < FB_W; x += P[p][2])
-							for (int c = 0; c < 4; c++) {
-								uint16_t v = (uint16_t)(x * 131 + y * 71 + c * 4099);
-
-								put8(&raw, v >> 8); put8(&raw, (uint8_t)v);
-							}
+							for (int c = 0; c < 4; c++) put8(&raw, (uint8_t)(x * 131 + y * 71 + c * 67));
 					}
-				put_head(&b, 16, 1);
+				put_head(&b, 8, 1);
 				put_stored(&b, raw.p, raw.n);
-				CHECK(b.n <= DIATOM_BEZEL_FILE_MAX && write_bytes(path, &b), "a 16-bit Adam7 PNG: written");
+				CHECK(b.n <= DIATOM_BEZEL_FILE_MAX && write_bytes(path, &b), "an Adam7 PNG: written");
 				px = decode(path, &largest, &why);
 				for (int y = 0; px && y < FB_H; y++)
 					for (int x = 0; x < FB_W; x++)
 						for (int c = 0; c < 4; c++)
-							bad += px[((size_t)y * FB_W + x) * 4 + c] != (uint8_t)((uint16_t)(x * 131 + y * 71 + c * 4099) >> 8);
-				CHECK(px && !bad, "a 752x560 16-bit RGBA Adam7 PNG of %zu bytes: decoded, got %s", b.n,
+							bad += px[((size_t)y * FB_W + x) * 4 + c] != (uint8_t)(x * 131 + y * 71 + c * 67);
+				CHECK(px && !bad, "a 752x560 RGBA Adam7 PNG of %zu bytes: decoded, got %s", b.n,
 				      px ? "other pixels" : why ? why : "no reason");
-				printf("  %-62s largest allocation %zu\n", "a 752x560 16-bit RGBA Adam7 PNG", largest);
+				CHECK(largest == 2 * ((size_t)FB_W * FB_H * 4 + FB_H), "an Adam7 PNG: given %zu bytes at once, twice stb's guess",
+				      largest);
+				printf("  %-62s largest allocation %zu\n", "a 752x560 RGBA Adam7 PNG", largest);
 				stbi_image_free(px);
 				free(b.p); free(raw.p);
 			}

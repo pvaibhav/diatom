@@ -6,21 +6,24 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-/* No single request stb makes for a 752x560 PNG of at most 4 MB
- * (DIATOM_BEZEL_FILE_MAX) needs more than 8 MiB:
- *   the IDAT chunks, gathered into one buffer that doubles: under twice the
- *     4 MB file;
- *   the inflated scanlines, guessed as the 8-bit or 16-bit image plus a
- *     filter byte a row, and doubling when the data runs past the guess:
- *     Adam7's 1050 filter bytes against the guess's 560 push 16-bit RGBA from
- *     3,369,520 to 6,739,040;
- *   the pixels, 752*560*8 = 3,368,960 at 16 bits, the two filter scanlines
- *     12,032.
- * stb otherwise asks for what a file declares - 1 GiB for one IDAT chunk's
- * length, or a buffer that doubles for as long as the deflate stream keeps
- * inflating - and the device has 128 MB. A request over the ceiling fails as
- * stb's own out of memory. */
-#define STBI_DIATOM_ALLOC_MAX ((size_t)8 << 20)
+/* No single request stb makes for a bezel diatom_bezel_read passes - a
+ * 752x560 PNG 8 bits deep, of at most 4 MB (DIATOM_BEZEL_FILE_MAX) - needs
+ * more than 4 MiB when its IDAT holds what an encoder writes for it:
+ *   the inflated scanlines, guessed as the image at the file's channels plus
+ *     a filter byte a row, and doubling when the data runs past the guess:
+ *     RGBA is the most, and Adam7's 1050 filter bytes against the guess's
+ *     560 push it from 1,685,040 to 3,370,080;
+ *   the IDAT chunks, gathered into one buffer that doubles: under twice
+ *     their total however they are split, and RGBA's is 1,685,666 bytes
+ *     stored, 1.9 MB at most in fixed Huffman codes (9 bits a byte);
+ *   the pixels, palette, grey and RGB expanded to RGBA, 752*560*4 =
+ *     1,684,480, an Adam7 pass less, the two filter scanlines 6,016.
+ * That leaves 824,224 bytes (24%) over the scanlines, and admits any IDAT
+ * total up to 2 MiB, 10% over the 1.9 MB. stb otherwise asks for what a file
+ * declares - 1 GiB for one IDAT chunk's length, or a buffer that doubles for
+ * as long as the deflate stream keeps inflating - and the device has 128 MB.
+ * A request over the ceiling fails as stb's own out of memory. */
+#define STBI_DIATOM_ALLOC_MAX ((size_t)4 << 20)
 
 const size_t stbi_diatom_alloc_max = STBI_DIATOM_ALLOC_MAX;
 size_t stbi_diatom_largest;          /* the largest allocation handed out, for the tests */

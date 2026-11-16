@@ -136,9 +136,9 @@ bool diatom_bezel_parse(const char *file, const char *lens, diatom_rect *rect);
 
 /* A lens image's file, read whole only when it is at most
  * DIATOM_BEZEL_FILE_MAX bytes, and returned only when IHDR, the first chunk
- * of those bytes, says fb_w x fb_h. So no image of another size is ever
- * decoded. NULL, with the reason in `why`, otherwise; the caller frees what
- * it returns. */
+ * of those bytes, says fb_w x fb_h at a bit depth of 8. So no image of
+ * another size or depth is ever decoded. NULL, with the reason in `why`,
+ * otherwise; the caller frees what it returns. */
 uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why);
 
 typedef struct { uint16_t r, g, b, na; } diatom_bezel_px;   /* c*a + 127 per channel, and 255 - a */

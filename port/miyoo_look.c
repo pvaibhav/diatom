@@ -395,7 +395,8 @@ static uint32_t be32(const uint8_t *p)
 
 uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why)
 {
-	/* The signature, then IHDR's length and type, then its width and height. */
+	/* The signature, then IHDR's length and type, then its width, height
+	 * and bit depth. */
 	static const uint8_t png_head[16] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R' };
 	uint8_t *png = NULL;
 	FILE *f = fopen(path, "rb");
@@ -406,7 +407,7 @@ uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, co
 	*why = "larger than 4 MB";
 	if (n > DIATOM_BEZEL_FILE_MAX) goto out;
 	*why = "not a PNG";
-	if (n < (long)sizeof png_head + 8) goto out;
+	if (n < (long)sizeof png_head + 9) goto out;
 	*why = "unreadable, or out of memory";
 	if (!(png = malloc((size_t)n)) || fread(png, 1, (size_t)n, f) != (size_t)n) goto refuse;
 	/* Checked in the bytes the decoder is handed, not in an earlier read the
@@ -415,6 +416,10 @@ uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, co
 	if (memcmp(png, png_head, sizeof png_head) != 0) goto refuse;
 	*why = "not the panel's size";
 	if (fb_w <= 0 || fb_h <= 0 || be32(png + 16) != (uint32_t)fb_w || be32(png + 20) != (uint32_t)fb_h) goto refuse;
+	/* stb leaks the 16-bit pixels when their conversion to 8 bits finds no
+	 * memory, and no bezel needs more than 8. */
+	*why = "not 8 bits deep";
+	if (png[24] != 8) goto refuse;
 	*len = (size_t)n;
 	*why = NULL;
 	goto out;
