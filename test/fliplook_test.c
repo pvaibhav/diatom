@@ -431,7 +431,7 @@ int main(void)
 	{
 		image gb = make_image(160, 144, DIATOM_PIX_RGB565, true), gba = make_image(240, 160, DIATOM_PIX_XRGB8888, false);
 		diatom_look l;
-		uint32_t *a = page(), *b, *c = page();
+		uint32_t *a = page(), *c = page(), *ref;
 		bool same = true;
 
 		memset(&l, 0, sizeof l);
@@ -442,13 +442,16 @@ int main(void)
 		CHECK(same, "a refused look draws nothing");
 		CHECK(diatom_look_prepare(&l, screen("dots-dmg"), 160, 144, GB[1].d, FB_W, FB_H), "dots");
 		diatom_look_draw(&l, gb.px, gb.pitch, gb.fmt, a, FB_W);
+		ref = reference(screen("dots-dmg"), &gb, GB[1].d);
+		compare(a, ref, GB[1].d, 1, "a refused renderer reused for dots");
+		free(ref);
 		CHECK(diatom_look_prepare(&l, screen("grid-gba"), 240, 160, GBA[1].d, FB_W, FB_H), "then a grid");
 		diatom_look_draw(&l, gba.px, gba.pitch, gba.fmt, c, FB_W);
-		b = draw(screen("grid-gba"), &gba, GBA[1].d);
-		same = !memcmp(b, c, (size_t)FB_W * FB_H * 4);
-		CHECK(same, "a reused renderer draws what a fresh one does");
+		ref = reference(screen("grid-gba"), &gba, GBA[1].d);
+		compare(c, ref, GBA[1].d, 0, "the dots' renderer reused for a grid");
+		free(ref);
 		diatom_look_free(&l);
-		free(a); free(b); free(c);
+		free(a); free(c);
 		free_image(&gb);
 		free_image(&gba);
 	}
