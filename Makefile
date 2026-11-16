@@ -34,8 +34,9 @@ PORT_EXTRA_gkd   := port/gkd_gl.c
 PORT_EXTRA_brick := port/gkd_gl.c
 # The GL window while a shader is set, as the Brick (port/h700.c).
 PORT_EXTRA_h700  := port/gkd_gl.c
-# The Flip's CPU scaling (ADR-9001), its own file for the host test and scalebench.
-PORT_EXTRA_miyoo := port/miyoo_scale.c
+# The Flip's CPU scaling (ADR-9001) and its Look (ADR-9002), their own files for
+# the host tests, scalebench and lookshot.
+PORT_EXTRA_miyoo := port/miyoo_scale.c port/miyoo_look.c
 # The Rotate is the GKD's session (sway, PipeWire): the same port file.
 PORT_SRC_rotate  := port/gkd.c
 PORT_EXTRA_rotate := port/gkd_gl.c
