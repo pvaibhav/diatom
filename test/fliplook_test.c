@@ -10,7 +10,8 @@
  *   the picture lands turned 180 degrees, clipped, nothing written outside it;
  *   a few pixels worked out by hand;
  *   the bezel: its page, its name, the file read only when its header is
- *     the panel's size, and its lens laid back over the picture. */
+ *     the panel's size, decoded without asking for more memory than any
+ *     752x560 PNG needs, and its lens laid back over the picture. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,13 @@
 #include <unistd.h>
 
 #include "miyoo_look.h"
+#include "stb_image.h"
+#include "stb_image_write.h"
+
+/* vendor/stb/stb_image.c: its ceiling on one allocation, and the largest it
+ * has handed out. */
+extern const size_t stbi_diatom_alloc_max;
+extern size_t stbi_diatom_largest;
 
 static int failures;
 #define CHECK(c, ...) do { if (!(c)) { printf("  FAIL "); printf(__VA_ARGS__); printf("\n"); failures++; } } while (0)
@@ -115,6 +123,121 @@ static bool header_file(const char *path, const char *chunk, uint32_t w, uint32_
 	ok = fwrite(head, 1, size < 24 ? (size_t)size : sizeof head, f) == (size < 24 ? (size_t)size : sizeof head);
 	ok &= fclose(f) == 0;
 	return ok && (size <= 24 || truncate(path, size) == 0);
+}
+
+/* ---- PNGs written by hand, for the decoder ---- */
+
+typedef struct { uint8_t *p; size_t n, cap; uint32_t bits; int nbits; } bytes;
+
+static void put(bytes *b, const void *d, size_t n)
+{
+	if (b->n + n > b->cap) {
+		while (b->n + n > b->cap) b->cap = b->cap ? b->cap * 2 : 4096;
+		b->p = realloc(b->p, b->cap);
+	}
+	memcpy(b->p + b->n, d, n);
+	b->n += n;
+}
+
+static void put8(bytes *b, uint8_t v) { put(b, &v, 1); }
+static void put32(bytes *b, uint32_t v) { uint8_t be[4] = { v >> 24, v >> 16, v >> 8, v }; put(b, be, 4); }
+
+/* Deflate's bits, least significant first; its Huffman codes, most first. */
+static void put_bits(bytes *b, uint32_t v, int n)
+{
+	b->bits |= v << b->nbits;
+	for (b->nbits += n; b->nbits >= 8; b->nbits -= 8, b->bits >>= 8) put8(b, (uint8_t)b->bits);
+}
+
+static void put_code(bytes *b, uint32_t code, int n)
+{
+	while (n--) put_bits(b, code >> n & 1, 1);
+}
+
+static uint32_t crc32_of(const uint8_t *p, size_t n)
+{
+	uint32_t c = 0xFFFFFFFFu;
+
+	while (n--) {
+		c ^= *p++;
+		for (int k = 0; k < 8; k++) c = c >> 1 ^ (0xEDB88320u & -(c & 1));
+	}
+	return ~c;
+}
+
+/* A chunk of `n` data bytes whose length field says `declared`. */
+static void put_chunk(bytes *b, const char *type, const void *data, size_t n, uint32_t declared)
+{
+	size_t at;
+
+	put32(b, declared);
+	at = b->n;
+	put(b, type, 4);
+	if (n) put(b, data, n);
+	put32(b, crc32_of(b->p + at, n + 4));
+}
+
+/* The signature and IHDR. */
+static void put_head(bytes *b, int depth, int interlace)
+{
+	uint8_t ihdr[13] = { 0, 0, FB_W >> 8, FB_W & 255, 0, 0, FB_H >> 8, FB_H & 255, (uint8_t)depth, 6, 0, 0, (uint8_t)interlace };
+
+	put(b, "\x89PNG\r\n\x1A\n", 8);
+	put_chunk(b, "IHDR", ihdr, sizeof ihdr, sizeof ihdr);
+}
+
+/* `raw` in a zlib stream of stored blocks, as IDAT, then IEND. */
+static void put_stored(bytes *b, const uint8_t *raw, size_t n)
+{
+	bytes z = { 0 };
+	uint32_t a = 1, s = 0;
+
+	put8(&z, 0x78); put8(&z, 0x01);
+	for (size_t at = 0; at < n || at == 0; at += 65535) {
+		uint16_t len = n - at > 65535 ? 65535 : (uint16_t)(n - at);
+		uint8_t hdr[5] = { at + len >= n, len & 255, len >> 8, ~len & 255, (uint16_t)~len >> 8 };
+
+		put(&z, hdr, 5);
+		if (len) put(&z, raw + at, len);
+		if (!n) break;
+	}
+	for (size_t i = 0; i < n; i++) { a = (a + raw[i]) % 65521; s = (s + a) % 65521; }
+	put32(&z, s << 16 | a);
+	put_chunk(b, "IDAT", z.p, z.n, (uint32_t)z.n);
+	put_chunk(b, "IEND", NULL, 0, 0);
+	free(z.p);
+}
+
+static bool write_bytes(const char *path, const bytes *b)
+{
+	FILE *f = fopen(path, "wb");
+	bool ok = f && fwrite(b->p, 1, b->n, f) == b->n;
+
+	return (f && fclose(f) == 0) && ok;
+}
+
+static void put_stbiw(void *ctx, void *data, int n)
+{
+	put(ctx, data, (size_t)n);
+}
+
+/* The file read as the port reads it, then decoded to RGBA; NULL if either
+ * refuses, `largest` the biggest allocation stb was given. */
+static uint8_t *decode(const char *path, size_t *largest, const char **why)
+{
+	size_t len;
+	uint8_t *png, *px = NULL;
+	int w, h, n;
+
+	stbi_diatom_largest = 0;
+	if ((png = diatom_bezel_read(path, FB_W, FB_H, &len, why))) {
+		px = stbi_load_from_memory(png, (int)len, &w, &h, &n, 4);
+		*why = px ? NULL : stbi_failure_reason();
+		if (px && (w != FB_W || h != FB_H)) { stbi_image_free(px); px = NULL; *why = "decoded to another size"; }
+		free(png);
+	}
+	*largest = stbi_diatom_largest;
+	return px;
 }
 
 static uint32_t ref_grid(const diatom_look_grid *g, uint32_t p, bool gx, bool gy)
@@ -533,6 +656,120 @@ int main(void)
 
 			unlink(path);
 			CHECK(!diatom_bezel_read(path, FB_W, FB_H, &len, &why) && why && !strcmp(why, "unreadable"), "no file: unreadable");
+		}
+	}
+
+	printf("fliplook: bezel decode\n");
+	{
+		const char *tmp = getenv("TMPDIR"), *why;
+		char path[512];
+		size_t largest;
+		uint8_t *px;
+		int fd;
+
+		/* No allocation is to pass twice the largest file: what the IDAT
+		 * buffer's doubling needs (vendor/stb/stb_image.c). */
+		snprintf(path, sizeof path, "%s/fliplook-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+		CHECK((fd = mkstemp(path)) >= 0, "a scratch file");
+		if (fd >= 0) {
+			close(fd);
+
+			/* A 752x560 file of 0.8 MB whose one IDAT inflates to 128 MiB of
+			 * zeros: a literal, then copies of 258 at distance 1 in fixed
+			 * Huffman codes. stb takes the data past the scanlines, so all it
+			 * would stop on is the memory. */
+			{
+				bytes b = { 0 }, z = { 0 };
+				uint32_t k = (128u << 20) / 258, total = 1 + 258 * k;
+
+				put8(&z, 0x78); put8(&z, 0x01);
+				put_bits(&z, 1, 1); put_bits(&z, 1, 2);    /* the last block, fixed codes */
+				put_code(&z, 0x30, 8);                     /* literal 0 */
+				for (uint32_t i = 0; i < k; i++) { put_code(&z, 0xC5, 8); put_code(&z, 0, 5); }   /* 285, distance 1 */
+				put_code(&z, 0, 7);                        /* end of block */
+				if (z.nbits) put8(&z, (uint8_t)z.bits);
+				put32(&z, (total % 65521) << 16 | 1);
+				put_head(&b, 8, 0);
+				put_chunk(&b, "IDAT", z.p, z.n, (uint32_t)z.n);
+				put_chunk(&b, "IEND", NULL, 0, 0);
+				CHECK(b.n < DIATOM_BEZEL_FILE_MAX && write_bytes(path, &b), "a zip bomb: written");
+				px = decode(path, &largest, &why);
+				CHECK(!px && why && !strcmp(why, "outofmem"), "a zip bomb of %zu bytes: refused as outofmem, got %s", b.n,
+				      px ? "an image" : why ? why : "no reason");
+				CHECK(largest <= stbi_diatom_alloc_max && largest <= 2 * DIATOM_BEZEL_FILE_MAX,
+				      "a zip bomb: given %zu bytes at once (ceiling %zu)", largest, stbi_diatom_alloc_max);
+				stbi_image_free(px);
+				free(b.p); free(z.p);
+			}
+
+			/* 41 bytes: a 752x560 IHDR, then an IDAT that says 1 GiB and
+			 * ends at its type. */
+			{
+				bytes b = { 0 };
+
+				put_head(&b, 8, 0);
+				put32(&b, 1u << 30);
+				put(&b, "IDAT", 4);
+				CHECK(b.n == 41 && write_bytes(path, &b), "a 1 GiB IDAT: written");
+				px = decode(path, &largest, &why);
+				CHECK(!px && why && !strcmp(why, "outofmem"), "a 1 GiB IDAT in 41 bytes: refused as outofmem, got %s",
+				      px ? "an image" : why ? why : "no reason");
+				CHECK(largest <= stbi_diatom_alloc_max && largest <= 2 * DIATOM_BEZEL_FILE_MAX,
+				      "a 1 GiB IDAT: given %zu bytes at once (ceiling %zu)", largest, stbi_diatom_alloc_max);
+				stbi_image_free(px);
+				free(b.p);
+			}
+
+			/* stb_image_write's 752x560 RGBA, of noise: decoded, every pixel. */
+			{
+				uint8_t *rgba = malloc((size_t)FB_W * FB_H * 4);
+				bytes b = { 0 };
+
+				for (size_t i = 0; i < (size_t)FB_W * FB_H * 4; i++) rgba[i] = (uint8_t)rnd();
+				CHECK(stbi_write_png_to_func(put_stbiw, &b, FB_W, FB_H, 4, rgba, FB_W * 4) && write_bytes(path, &b),
+				      "an RGBA PNG: written");
+				px = decode(path, &largest, &why);
+				CHECK(px && !memcmp(px, rgba, (size_t)FB_W * FB_H * 4), "stb_image_write's 752x560 RGBA of %zu bytes: decoded, got %s",
+				      b.n, px ? "other pixels" : why ? why : "no reason");
+				printf("  %-62s largest allocation %zu\n", "stb_image_write's 752x560 RGBA", largest);
+				stbi_image_free(px);
+				free(b.p); free(rgba);
+			}
+
+			/* 16-bit RGBA, Adam7, stored: the most a real bezel asks for,
+			 * the inflated passes running past stb's guess. */
+			{
+				static const int P[7][4] = { { 0, 0, 8, 8 }, { 4, 0, 8, 8 }, { 0, 4, 4, 8 }, { 2, 0, 4, 4 },
+				                             { 0, 2, 2, 4 }, { 1, 0, 2, 2 }, { 0, 1, 1, 2 } };
+				bytes b = { 0 }, raw = { 0 };
+				int bad = 0;
+
+				for (int p = 0; p < 7; p++)
+					for (int y = P[p][1]; y < FB_H; y += P[p][3]) {
+						if (P[p][0] >= FB_W) break;
+						put8(&raw, 0);
+						for (int x = P[p][0]; x < FB_W; x += P[p][2])
+							for (int c = 0; c < 4; c++) {
+								uint16_t v = (uint16_t)(x * 131 + y * 71 + c * 4099);
+
+								put8(&raw, v >> 8); put8(&raw, (uint8_t)v);
+							}
+					}
+				put_head(&b, 16, 1);
+				put_stored(&b, raw.p, raw.n);
+				CHECK(b.n <= DIATOM_BEZEL_FILE_MAX && write_bytes(path, &b), "a 16-bit Adam7 PNG: written");
+				px = decode(path, &largest, &why);
+				for (int y = 0; px && y < FB_H; y++)
+					for (int x = 0; x < FB_W; x++)
+						for (int c = 0; c < 4; c++)
+							bad += px[((size_t)y * FB_W + x) * 4 + c] != (uint8_t)((uint16_t)(x * 131 + y * 71 + c * 4099) >> 8);
+				CHECK(px && !bad, "a 752x560 16-bit RGBA Adam7 PNG of %zu bytes: decoded, got %s", b.n,
+				      px ? "other pixels" : why ? why : "no reason");
+				printf("  %-62s largest allocation %zu\n", "a 752x560 16-bit RGBA Adam7 PNG", largest);
+				stbi_image_free(px);
+				free(b.p); free(raw.p);
+			}
+			unlink(path);
 		}
 	}
 

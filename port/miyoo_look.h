@@ -134,10 +134,11 @@ bool diatom_bezel_parse(const char *file, const char *lens, diatom_rect *rect);
  * chunks and keeps the read small beside the device's 128 MB. */
 #define DIATOM_BEZEL_FILE_MAX (4L << 20)
 
-/* A lens image's file, read whole only once its size and its PNG header
- * pass: at most DIATOM_BEZEL_FILE_MAX bytes, and IHDR, the first chunk,
- * saying fb_w x fb_h. So no image of another size is ever decoded. NULL, with
- * the reason in `why`, otherwise; the caller frees what it returns. */
+/* A lens image's file, read whole only when it is at most
+ * DIATOM_BEZEL_FILE_MAX bytes, and returned only when IHDR, the first chunk
+ * of those bytes, says fb_w x fb_h. So no image of another size is ever
+ * decoded. NULL, with the reason in `why`, otherwise; the caller frees what
+ * it returns. */
 uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why);
 
 typedef struct { uint16_t r, g, b, na; } diatom_bezel_px;   /* c*a + 127 per channel, and 255 - a */

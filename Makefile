@@ -523,10 +523,17 @@ $(BUILD)/flipscale-test: test/flipscale_test.c port/miyoo_scale.c port/miyoo_sca
 check-fliplook: $(BUILD)/fliplook-test
 	@./$(BUILD)/fliplook-test
 
-$(BUILD)/fliplook-test: test/fliplook_test.c port/miyoo_look.c port/miyoo_look.h
+# stb for the test: under the sanitizers, as hostile files are decoded, and on
+# stb's own terms otherwise.
+FLIPLOOK_STB := $(BUILD)/fliplook-stb_image.o $(BUILD)/fliplook-stb_image_write.o
+$(FLIPLOOK_STB): $(BUILD)/fliplook-%.o: $(STB_DIR)/%.c $(STB_DIR)/%.h
+	@mkdir -p $(@D)
+	cc -std=gnu11 -O1 -g -I$(STB_DIR) $(SAN_AU) -fno-sanitize-recover=all -c -o $@ $<
+
+$(BUILD)/fliplook-test: test/fliplook_test.c port/miyoo_look.c port/miyoo_look.h $(FLIPLOOK_STB)
 	@mkdir -p $(BUILD)
-	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport $(SAN_AU) \
-	   -fno-sanitize-recover=all -o $@ test/fliplook_test.c port/miyoo_look.c -lm
+	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport -I$(STB_DIR) $(SAN_AU) \
+	   -fno-sanitize-recover=all -o $@ test/fliplook_test.c port/miyoo_look.c $(FLIPLOOK_STB) -lm
 .PHONY: check-fliplook
 
 # Deliberately NOT part of `check`. It needs a build and it runs in real time -

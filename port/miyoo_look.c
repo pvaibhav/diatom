@@ -395,9 +395,9 @@ static uint32_t be32(const uint8_t *p)
 
 uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why)
 {
-	/* The signature, then IHDR's length and type. */
+	/* The signature, then IHDR's length and type, then its width and height. */
 	static const uint8_t png_head[16] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R' };
-	uint8_t head[24], *png = NULL;
+	uint8_t *png = NULL;
 	FILE *f = fopen(path, "rb");
 	long n;
 
@@ -406,17 +406,21 @@ uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, co
 	*why = "larger than 4 MB";
 	if (n > DIATOM_BEZEL_FILE_MAX) goto out;
 	*why = "not a PNG";
-	if (fread(head, 1, sizeof head, f) != sizeof head || memcmp(head, png_head, sizeof png_head) != 0) goto out;
-	*why = "not the panel's size";
-	if (fb_w <= 0 || fb_h <= 0 || be32(head + 16) != (uint32_t)fb_w || be32(head + 20) != (uint32_t)fb_h) goto out;
+	if (n < (long)sizeof png_head + 8) goto out;
 	*why = "unreadable, or out of memory";
-	if (fseek(f, 0, SEEK_SET) != 0 || !(png = malloc((size_t)n)) || fread(png, 1, (size_t)n, f) != (size_t)n) {
-		free(png);
-		png = NULL;
-		goto out;
-	}
+	if (!(png = malloc((size_t)n)) || fread(png, 1, (size_t)n, f) != (size_t)n) goto refuse;
+	/* Checked in the bytes the decoder is handed, not in an earlier read the
+	 * file could have changed after. */
+	*why = "not a PNG";
+	if (memcmp(png, png_head, sizeof png_head) != 0) goto refuse;
+	*why = "not the panel's size";
+	if (fb_w <= 0 || fb_h <= 0 || be32(png + 16) != (uint32_t)fb_w || be32(png + 20) != (uint32_t)fb_h) goto refuse;
 	*len = (size_t)n;
 	*why = NULL;
+	goto out;
+refuse:
+	free(png);
+	png = NULL;
 out:
 	if (f) fclose(f);
 	return png;

@@ -21,4 +21,6 @@ rename.
 
 `stb_image.c` is the same for the decoder, on the same terms: PNG only
 (`STBI_ONLY_PNG`), from memory (`STBI_NO_STDIO`), no float API
-(`STBI_NO_LINEAR`). Only the Flip's build links it.
+(`STBI_NO_LINEAR`), and every allocation it makes refused over 8 MiB through
+`STBI_MALLOC`/`STBI_REALLOC_SIZED` (the arithmetic is in the file). Only the
+Flip's build links it.
