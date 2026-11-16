@@ -901,6 +901,12 @@ Two levers the spike discovered:
       *(Accepted)*. The blitter always smooths. Soft is the blitter alone, Crisp
       a CPU upscale by whole factors that it scales down, and Integer is drawn
       on the CPU, whole pixels on every port. `tools/scalebench` times the CPU.
+- [x] **[OPEN]** **Retro on the Flip, which has no GPU for the shaders** →
+      **[ADR-9002](decisions/9002-the-flip-draws-the-look-on-the-cpu.md)**
+      *(Accepted)*. Game Boy dots and the Color and Advance grid are drawn on
+      the CPU, under the blit they replace, and a bezel is one page copied plus
+      the lens's edge blended back; the shader chain's file names pick them.
+      `tools/lookshot` draws a page for comparison with the mock-ups.
 - [x] **[OPEN]** **The end-of-session fps line counted menu time as slow
       frames.** `t_start` was set once at load and never rebased, so the rate
       was frames over wall clock. Pacing already rebased `next_us` on resume for
