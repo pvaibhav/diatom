@@ -403,7 +403,7 @@ $(BUILD)/%.o: %.c
 # fails when it is broken. check-seam has held since day one for exactly that
 # reason; the register drifted 418 -> 992 lines in three days because nothing
 # ever complained.
-check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options check-flipscale
+check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options check-flipscale check-fliplook
 
 # Does a RetroAchievements address reach the byte it names? Offline, needs no
 # core and no ROM, and links only cheevos.c plus the vendored runtime - so it
@@ -498,6 +498,17 @@ $(BUILD)/flipscale-test: test/flipscale_test.c port/miyoo_scale.c port/miyoo_sca
 	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport $(SAN_AU) \
 	   -fno-sanitize-recover=all -o $@ test/flipscale_test.c port/miyoo_scale.c src/scale.c -lm
 .PHONY: check-flipscale
+
+# The Flip's Look renderers and bezel (ADR-9002) against per-pixel references
+# written from their definitions. Host compiler.
+check-fliplook: $(BUILD)/fliplook-test
+	@./$(BUILD)/fliplook-test
+
+$(BUILD)/fliplook-test: test/fliplook_test.c port/miyoo_look.c port/miyoo_look.h
+	@mkdir -p $(BUILD)
+	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport $(SAN_AU) \
+	   -fno-sanitize-recover=all -o $@ test/fliplook_test.c port/miyoo_look.c -lm
+.PHONY: check-fliplook
 
 # Deliberately NOT part of `check`. It needs a build and it runs in real time -
 # Diatom paces to the core's frame rate, so 300 frames costs five seconds of
