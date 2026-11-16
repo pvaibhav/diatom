@@ -32,8 +32,10 @@
 typedef enum { DIATOM_LOOK_NONE, DIATOM_LOOK_DOTS, DIATOM_LOOK_GRID } diatom_look_kind;
 
 /* The Authentic shader's constants for one Game Boy screen (authentic.py's
- * DOTS); GAP, SHADOW and the dot shadow's offset and strength are the
- * shader's own and the same for all three. */
+ * DOTS); GAP is the shader's own. The dot shadow is not: it falls half a
+ * game pixel down and left at 0.30 of a dot's ink, where the shader has a
+ * whole pixel and 0.45, which at the Flip's three or four panel pixels a
+ * cell drew a hard copy of the dot. The same for all three. */
 typedef struct {
 	uint8_t panel[3], ink[3];       /* the reflector lit, and the ink, 0..255 */
 	float   baseline_alpha, grey_balance, contrast, screen_light, pixel_opacity, shadow_opacity;

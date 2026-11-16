@@ -72,8 +72,10 @@ Option C, picked by names in the existing chain.
   the column's, the row's or, where they cross, the larger amount. Integer arithmetic, from tables.
 - Dots: each pixel's shade by brightness, and a table per class of panel row, class of column and 10-bit neighbourhood
   (self, left, up, right, up-right) holding the cell's panel pixels. A class is a cell width, or the picture's first
-  cell, whose gap has no neighbour to take ink from. The shadow is sampled from those four texels only, with weights
-  from the panel pixel's centre in its cell; the texels the shader would also reach are folded into the nearest.
+  cell, whose gap has no neighbour to take ink from. The shadow is the grey sampled half a game pixel right and up of
+  the panel pixel's centre, bilinearly, which reaches exactly those four texels (self, right, up, up-right), at 0.30 of
+  a dot's ink. The shader's own is a whole pixel and 0.45: at three or four panel pixels a cell that drew a dark,
+  hard-edged copy of each dot, not a shadow, so the Flip's is nearer and fainter.
   Cells wider than 6 panel pixels are not drawn as dots (the table grows with the square of the width); the Flip's
   widest is Stretch's 5.
 - Bezel: on each accepted chain the port lists the lens's images (`<lens>-<w>x<h>+<x>+<y>.png`). For a rect whose size

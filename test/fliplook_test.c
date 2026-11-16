@@ -542,6 +542,17 @@ int main(void)
 		fb = draw(screen("grid-gbc"), &black, d);
 		CHECK(at(fb, d, 1, 1) == 0x0D1E0F, "grid-gbc black cell %06x, by hand 0d1e0f", (unsigned)at(fb, d, 1, 1));
 		free(fb);
+		/* dots-dmg, white but for a black pixel at (2, 1), 3x: the bottom-right
+		 * panel pixel of (1, 1)'s cell is 5/6 across and down it, so the shadow
+		 * takes 5/6 * 5/6 = 25/36 of the black dot to its right and the rest from
+		 * white: ink 3/2.6 * 25/36 + 0.05 = 0.8513, shadow that * 0.63 * 0.30 *
+		 * (1 - 0.75 * 0.05) = 0.15486; R 161 * (1 - 0.15486) * 0.8185 = 111.37,
+		 * G 4.49 + the same = 115.86, B 8.49. A whole pixel's offset would take
+		 * the black dot in full there. */
+		((uint32_t *)((uint8_t *)white.px + white.pitch))[2] = 0x000000;
+		fb = draw(screen("dots-dmg"), &white, d);
+		CHECK(at(fb, d, 5, 5) == 0x6F7408, "dots-dmg shadow beside a black dot %06x, by hand 6f7408", (unsigned)at(fb, d, 5, 5));
+		free(fb);
 		free_image(&white);
 		free_image(&black);
 	}
