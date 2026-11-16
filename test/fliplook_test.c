@@ -9,11 +9,13 @@
  *     neighbours' ink, the shadow sampled right and up, within 1 a channel;
  *   the picture lands turned 180 degrees, clipped, nothing written outside it;
  *   a few pixels worked out by hand;
- *   the bezel: its page, its name, and its lens laid back over the picture. */
+ *   the bezel: its page, its name, the file read only when its header is
+ *     the panel's size, and its lens laid back over the picture. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "miyoo_look.h"
 
@@ -97,6 +99,23 @@ static void place(int x, int n_src, int n_dst, int *k, int *len)
 }
 
 static int ch(uint32_t p, int c) { return p >> (16 - 8 * c) & 255; }
+
+/* A file of `size` bytes in `path` that starts with a PNG signature and an
+ * IHDR for w x h, and nothing a decoder could use after it. `chunk` is the
+ * first chunk's type. */
+static bool header_file(const char *path, const char *chunk, uint32_t w, uint32_t h, long size)
+{
+	uint8_t head[24] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13 };
+	FILE *f = fopen(path, "wb");
+	bool ok;
+
+	memcpy(head + 12, chunk, 4);
+	for (int i = 0; i < 4; i++) { head[16 + i] = (uint8_t)(w >> (24 - 8 * i)); head[20 + i] = (uint8_t)(h >> (24 - 8 * i)); }
+	if (!f) return false;
+	ok = fwrite(head, 1, size < 24 ? (size_t)size : sizeof head, f) == (size < 24 ? (size_t)size : sizeof head);
+	ok &= fclose(f) == 0;
+	return ok && (size <= 24 || truncate(path, size) == 0);
+}
 
 static uint32_t ref_grid(const diatom_look_grid *g, uint32_t p, bool gx, bool gy)
 {
@@ -471,6 +490,50 @@ int main(void)
 		      !diatom_bezel_parse("dmg-0x432+1+2.png", "dmg", &r) && !diatom_bezel_parse("dmg-480x432+136+72.PNG", "dmg", &r) &&
 		      !diatom_bezel_parse("dmgx-480x432+136+72.png", "dmg", &r),
 		      "nothing else");
+	}
+
+	printf("fliplook: bezel files\n");
+	{
+		static const struct { const char *what, *chunk; uint32_t w, h; long size; const char *why; } FILES[] = {
+			{ "an 8192x8192 PNG of 261 KB", "IHDR", 8192, 8192, 261 * 1024, "not the panel's size" },
+			{ "a 640x480 PNG", "IHDR", 640, 480, 4096, "not the panel's size" },
+			{ "a 752x560 PNG over 4 MB", "IHDR", FB_W, FB_H, DIATOM_BEZEL_FILE_MAX + 1, "larger than 4 MB" },
+			{ "a PNG whose first chunk is not IHDR", "CgBI", FB_W, FB_H, 4096, "not a PNG" },
+			{ "a file shorter than a PNG header", "IHDR", FB_W, FB_H, 20, "not a PNG" },
+			{ "a 752x560 PNG", "IHDR", FB_W, FB_H, 4096, NULL },
+			{ "a 752x560 PNG of exactly 4 MB", "IHDR", FB_W, FB_H, DIATOM_BEZEL_FILE_MAX, NULL },
+		};
+		const char *tmp = getenv("TMPDIR");
+		char path[512];
+		int fd;
+
+		snprintf(path, sizeof path, "%s/fliplook-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+		CHECK((fd = mkstemp(path)) >= 0, "a scratch file");
+		if (fd >= 0) close(fd);
+		/* The files hold a header and nothing to decode: what is refused is
+		 * refused from the header and the file's length, before any image is
+		 * decoded, and what passes is only read. */
+		for (size_t i = 0; fd >= 0 && i < sizeof FILES / sizeof *FILES; i++) {
+			const char *why = "unset";
+			size_t len = 0;
+			uint8_t *png;
+
+			CHECK(header_file(path, FILES[i].chunk, FILES[i].w, FILES[i].h, FILES[i].size), "%s: written", FILES[i].what);
+			png = diatom_bezel_read(path, FB_W, FB_H, &len, &why);
+			if (FILES[i].why)
+				CHECK(!png && why && !strcmp(why, FILES[i].why), "%s: refused as %s, got %s", FILES[i].what, FILES[i].why,
+				      png ? "the bytes" : why ? why : "no reason");
+			else
+				CHECK(png && !why && len == (size_t)FILES[i].size && !memcmp(png, "\x89PNG", 4), "%s: read whole", FILES[i].what);
+			free(png);
+		}
+		if (fd >= 0) {
+			const char *why = NULL;
+			size_t len = 0;
+
+			unlink(path);
+			CHECK(!diatom_bezel_read(path, FB_W, FB_H, &len, &why) && why && !strcmp(why, "unreadable"), "no file: unreadable");
+		}
 	}
 
 	printf("fliplook: bezel\n");

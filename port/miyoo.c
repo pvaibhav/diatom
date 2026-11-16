@@ -1257,22 +1257,19 @@ static void bezel_scan(void)
 static bool bezel_load(int i)
 {
 	char path[sizeof g_bz_dir + sizeof g_bz[0].file + 1], msg[sizeof path + 96];
-	const char *why = "unreadable";
-	uint8_t *png = NULL, *rgba = NULL;
-	FILE *f;
-	long len = 0;
+	const char *why;
+	uint8_t *png, *rgba = NULL;
+	size_t len;
 	int w = 0, h = 0, n;
 
 	snprintf(path, sizeof path, "%s/%s", g_bz_dir, g_bz[i].file);
-	if ((f = fopen(path, "rb")) && fseek(f, 0, SEEK_END) == 0 && (len = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0 &&
-	    (png = malloc((size_t)len)) && fread(png, 1, (size_t)len, f) == (size_t)len) {
+	if ((png = diatom_bezel_read(path, (int)g_var.xres, (int)g_var.yres, &len, &why))) {
 		why = "not a PNG it can decode";
 		rgba = stbi_load_from_memory(png, (int)len, &w, &h, &n, 4);
+		free(png);
 	}
-	if (f) fclose(f);
-	free(png);
 	if (rgba) {
-		why = "not 752x560, or out of memory";
+		why = "out of memory";
 		if (diatom_bezel_prepare(&g_bezel, rgba, w, h, g_look->panel, g_bz[i].r, (int)g_var.xres, (int)g_var.yres))
 			why = NULL;
 		stbi_image_free(rgba);

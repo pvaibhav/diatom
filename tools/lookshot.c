@@ -81,24 +81,30 @@ int main(int argc, char **argv)
 	for (int i = 0; i < FB_W * FB_H; i++) fb[i] = 0xFF000000u;
 	memset(&b, 0, sizeof b);
 	if (argc == 6) {
-		const char *file = strrchr(argv[5], '/'), *dash;
+		const char *file = strrchr(argv[5], '/'), *dash, *why;
 		char lens[16];
 		diatom_rect r;
+		uint8_t *png = NULL;
+		size_t len;
+		int n;
 
 		file = file ? file + 1 : argv[5];
 		dash = strchr(file, '-');
 		snprintf(lens, sizeof lens, "%.*s", dash ? (int)(dash - file) : 0, file);
 		if (!diatom_bezel_parse(file, lens, &r) || r.w != d.w || r.h != d.h)
 			fprintf(stderr, "lookshot: %s is not art for %dx%d: no bezel\n", file, d.w, d.h);
-		else if (!(art = load_png(argv[5], &aw, &ah)) ||
+		else if (!(png = diatom_bezel_read(argv[5], FB_W, FB_H, &len, &why)))
+			fprintf(stderr, "lookshot: %s: %s: no bezel\n", argv[5], why);
+		else if (!(art = stbi_load_from_memory(png, (int)len, &aw, &ah, &n, 4)) ||
 		         !diatom_bezel_prepare(&b, art, aw, ah, s->panel, r, FB_W, FB_H))
-			fprintf(stderr, "lookshot: %s will not do (unreadable, or not %dx%d): no bezel\n", argv[5], FB_W, FB_H);
+			fprintf(stderr, "lookshot: %s will not decode: no bezel\n", argv[5]);
 		else {
 			bezel = true;
 			d = r;
 			diatom_bezel_fill(&b, fb, FB_W);
 		}
 		if (art) stbi_image_free(art);
+		free(png);
 	}
 
 	memset(&l, 0, sizeof l);

@@ -388,6 +388,40 @@ bool diatom_bezel_parse(const char *file, const char *lens, diatom_rect *rect)
 	return true;
 }
 
+static uint32_t be32(const uint8_t *p)
+{
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why)
+{
+	/* The signature, then IHDR's length and type. */
+	static const uint8_t png_head[16] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R' };
+	uint8_t head[24], *png = NULL;
+	FILE *f = fopen(path, "rb");
+	long n;
+
+	*why = "unreadable";
+	if (!f || fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) goto out;
+	*why = "larger than 4 MB";
+	if (n > DIATOM_BEZEL_FILE_MAX) goto out;
+	*why = "not a PNG";
+	if (fread(head, 1, sizeof head, f) != sizeof head || memcmp(head, png_head, sizeof png_head) != 0) goto out;
+	*why = "not the panel's size";
+	if (fb_w <= 0 || fb_h <= 0 || be32(head + 16) != (uint32_t)fb_w || be32(head + 20) != (uint32_t)fb_h) goto out;
+	*why = "unreadable, or out of memory";
+	if (fseek(f, 0, SEEK_SET) != 0 || !(png = malloc((size_t)n)) || fread(png, 1, (size_t)n, f) != (size_t)n) {
+		free(png);
+		png = NULL;
+		goto out;
+	}
+	*len = (size_t)n;
+	*why = NULL;
+out:
+	if (f) fclose(f);
+	return png;
+}
+
 void diatom_bezel_free(diatom_bezel *b)
 {
 	free(b->bg);

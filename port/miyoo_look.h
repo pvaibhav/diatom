@@ -129,6 +129,17 @@ void diatom_look_free(diatom_look *l);
  * other name, another lens's included. */
 bool diatom_bezel_parse(const char *file, const char *lens, diatom_rect *rect);
 
+/* The largest lens image read. A 752x560 RGBA PNG stored with no
+ * compression at all is 1.7 MB; 4 MB leaves room for an encoder's other
+ * chunks and keeps the read small beside the device's 128 MB. */
+#define DIATOM_BEZEL_FILE_MAX (4L << 20)
+
+/* A lens image's file, read whole only once its size and its PNG header
+ * pass: at most DIATOM_BEZEL_FILE_MAX bytes, and IHDR, the first chunk,
+ * saying fb_w x fb_h. So no image of another size is ever decoded. NULL, with
+ * the reason in `why`, otherwise; the caller frees what it returns. */
+uint8_t *diatom_bezel_read(const char *path, int fb_w, int fb_h, size_t *len, const char **why);
+
 typedef struct { uint16_t r, g, b, na; } diatom_bezel_px;   /* c*a + 127 per channel, and 255 - a */
 typedef struct { uint16_t row, col, len; uint32_t at; } diatom_bezel_span;
 
