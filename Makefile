@@ -81,7 +81,13 @@ $(LZ4_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP
 # Same terms - its own flags, the header never patched.
 STB_DIR := vendor/stb
 STB_OBJ := $(BUILD)/$(STB_DIR)/stb_image_write.o
-$(STB_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP -I$(STB_DIR)
+# stb_image: the Flip's bezel images (ADR-9002), and lookshot's frames. Only
+# the Flip links it.
+STB_IMG_OBJ := $(BUILD)/$(STB_DIR)/stb_image.o
+$(STB_OBJ) $(STB_IMG_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP -I$(STB_DIR)
+ifeq ($(PORT),miyoo)
+  STB_OBJ += $(STB_IMG_OBJ)
+endif
 
 ifeq ($(PORT),desktop)
   # sdl2-config ships with SDL2 itself; pkg-config is a separate install and is
@@ -631,4 +637,4 @@ conform-device:
 # would otherwise become the default goal, and `make` would silently build one
 # object and stop - which it did, on 2026-08-26, and looked exactly like the
 # docker mtime staleness it was added to prevent.
--include $(OBJ:.o=.d) $(RC_OBJ:.o=.d) $(LZ4_OBJ:.o=.d) $(STB_OBJ:.o=.d)
+-include $(OBJ:.o=.d) $(RC_OBJ:.o=.d) $(LZ4_OBJ:.o=.d) $(STB_OBJ:.o=.d) $(STB_IMG_OBJ:.o=.d)
