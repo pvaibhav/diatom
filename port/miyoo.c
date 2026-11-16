@@ -6,7 +6,8 @@
  * vendor's blitter scales Soft and Crisp, after a CPU upscale for Crisp; the
  * CPU draws Integer (ADR-9001, choose_path below). No shaders - there is
  * nothing to run them on; ADR-0041's chain carries the scanline filter
- * instead (plorpos-f1p.75), which the blitter draws.
+ * instead (plorpos-f1p.75), which the blitter draws, and the Look of a Game
+ * Boy, Color or Advance screen and its bezel, which the CPU draws (ADR-9002).
  *
  * Audio: the vendor's MI_AO, reached with dlopen so the build needs none of
  * the vendor's libraries or headers. ALSA hw:0,0 and OSS /dev/dsp both play
@@ -39,7 +40,11 @@
 #include <unistd.h>
 
 #include "diatom_port.h"
+#include "miyoo_look.h"
 #include "miyoo_scale.h"
+#define STBI_NO_STDIO
+#define STBI_ONLY_PNG
+#include "stb_image.h"
 
 #define AUDIO_RATE          48000
 #define AUDIO_CHUNK         512     /* frames per MI_AO frame */
@@ -497,6 +502,20 @@ static diatom_scaler g_scaler;
  * draws plainly. */
 enum { FX_OFF, FX_SCAN };
 static int g_fx;
+/* The Look (ADR-9002), picked through the same chain: pass 1 names a screen
+ * instead of the scanlines, and a pass 2 "flipfx-bezel-<lens>" a lens whose
+ * images, "<lens>-<w>x<h>+<x>+<y>.png", are in bezels/ beside that path. */
+static const diatom_look_screen *g_look;
+static diatom_look g_lookr;
+#define BEZEL_FILES 16
+static struct { diatom_rect r; bool bad; char file[64]; } g_bz[BEZEL_FILES];
+static int      g_bz_n;
+static char     g_bz_lens[8], g_bz_dir[256];
+static int      g_bz_loaded = -1;   /* the entry g_bezel was built from, or -1 */
+static diatom_bezel g_bezel;
+static unsigned g_bz_gen;           /* bumped whenever g_bezel is rebuilt */
+static unsigned g_page_bg[3];       /* what each page has around its picture: 0 black, else a g_bz_gen */
+static int      g_bz_miss_w, g_bz_miss_h;
 static unsigned g_gfx_err;          /* filter blits or waits that returned an error, shown in the game-end line */
 
 static uint32_t *page_px(int page)
@@ -621,7 +640,8 @@ static unsigned g_blit_fail;         /* blits that failed, the frame drawn on th
 typedef enum {
 	PATH_BLIT,    /* the frame as it is; the blitter scales it (Soft, scanlines) */
 	PATH_CRISP,   /* the frame upscaled kx by ky on the CPU; the blitter scales that down */
-	PATH_CPU      /* the CPU scaler draws it (Integer, Crisp at whole factors, no blitter) */
+	PATH_CPU,     /* the CPU scaler draws it (Integer, Crisp at whole factors, no blitter) */
+	PATH_LOOK     /* the Look's renderer draws it on the CPU (ADR-9002) */
 } present_path;
 typedef struct {
 	int           w, h;
@@ -629,6 +649,8 @@ typedef struct {
 	diatom_rect   dst;
 	diatom_filter filter;
 	bool          scan;
+	const diatom_look_screen *look;
+	bool          bezel;
 	present_path  path;
 	int           kx, ky;
 	diatom_filter cpu;       /* the CPU scaler's filter, also when a blit fails */
@@ -1160,10 +1182,11 @@ static bool gfx_crisp(const void *src, int w, int h, size_t pitch, diatom_pixfmt
 /* The blitter takes rectangles up to 4095 a side (the vendor's MI_GFX_Rect_t). */
 #define GFX_MAX_SIDE 0xFFF
 
-static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter, bool scan)
+static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter, bool scan,
+                        const diatom_look_screen *look, bool bezel)
 {
 	if (g_path.w == w && g_path.h == h && g_path.fmt == fmt && g_path.filter == filter &&
-	    g_path.scan == scan && !memcmp(&g_path.dst, &dst, sizeof dst))
+	    g_path.scan == scan && g_path.look == look && g_path.bezel == bezel && !memcmp(&g_path.dst, &dst, sizeof dst))
 		return;
 
 	int kx = (dst.w + w - 1) / w, ky = (dst.h + h - 1) / h;
@@ -1171,8 +1194,11 @@ static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom
 	uint64_t bytes = (uint64_t)w * kx * h * ky * (fmt == DIATOM_PIX_RGB565 ? 2 : 4);
 
 	g_path = (path_choice){ .w = w, .h = h, .fmt = fmt, .dst = dst, .filter = filter, .scan = scan,
-	                           .path = PATH_CPU, .kx = kx, .ky = ky, .cpu = filter };
-	if (!g_gfx) {
+	                           .look = look, .bezel = bezel, .path = PATH_CPU, .kx = kx, .ky = ky, .cpu = filter };
+	if (look) {
+		g_path.path = PATH_LOOK;
+		snprintf(g_path.what, sizeof g_path.what, "Look/%s%s", look->name, bezel ? "+bezel" : "");
+	} else if (!g_gfx) {
 		snprintf(g_path.what, sizeof g_path.what, "%s/CPU, no blitter",
 		         filter == DIATOM_FILTER_NEAREST ? "Integer" : filter == DIATOM_FILTER_SHARP ? "Crisp" : "Soft");
 	} else if (scan) {
@@ -1199,6 +1225,86 @@ static void choose_path(int w, int h, diatom_pixfmt fmt, diatom_rect dst, diatom
 	}
 }
 
+static void look_reset(void)
+{
+	diatom_look_free(&g_lookr);
+	diatom_bezel_free(&g_bezel);
+	g_look = NULL;
+	g_bz_n = 0;
+	g_bz_lens[0] = g_bz_dir[0] = '\0';
+	g_bz_loaded = -1;
+	g_bz_miss_w = g_bz_miss_h = 0;
+}
+
+static void bezel_scan(void)
+{
+	DIR *d = opendir(g_bz_dir);
+	struct dirent *e;
+
+	while (d && (e = readdir(d)) && g_bz_n < BEZEL_FILES) {
+		diatom_rect r;
+
+		if (strlen(e->d_name) >= sizeof g_bz[0].file || !diatom_bezel_parse(e->d_name, g_bz_lens, &r)) continue;
+		g_bz[g_bz_n].r = r;
+		g_bz[g_bz_n].bad = false;
+		memcpy(g_bz[g_bz_n].file, e->d_name, strlen(e->d_name) + 1);
+		g_bz_n++;
+	}
+	if (d) closedir(d);
+}
+
+/* Entry i decoded into g_bezel. A file that will not do is marked and said once. */
+static bool bezel_load(int i)
+{
+	char path[sizeof g_bz_dir + sizeof g_bz[0].file + 1], msg[sizeof path + 96];
+	const char *why;
+	uint8_t *png, *rgba = NULL;
+	size_t len;
+	int w = 0, h = 0, n;
+
+	snprintf(path, sizeof path, "%s/%s", g_bz_dir, g_bz[i].file);
+	if ((png = diatom_bezel_read(path, (int)g_var.xres, (int)g_var.yres, &len, &why))) {
+		why = "not a PNG it can decode";
+		rgba = stbi_load_from_memory(png, (int)len, &w, &h, &n, 4);
+		free(png);
+	}
+	if (rgba) {
+		why = "out of memory";
+		if (diatom_bezel_prepare(&g_bezel, rgba, w, h, g_look->panel, g_bz[i].r, (int)g_var.xres, (int)g_var.yres))
+			why = NULL;
+		stbi_image_free(rgba);
+	}
+	if (!why) return true;
+	g_bz[i].bad = true;
+	snprintf(msg, sizeof msg, "video: bezel %s: %s; Retro with no bezel", path, why);
+	diatom_port_log(DIATOM_LOG_INFO, msg);
+	return false;
+}
+
+/* The bezel for a picture this size, ready in g_bezel, or NULL. */
+static const diatom_rect *bezel_for(int w, int h)
+{
+	char msg[sizeof g_bz_dir + 96];
+
+	if (!g_bz_lens[0]) return NULL;
+	for (int i = 0; i < g_bz_n; i++) {
+		if (g_bz[i].bad || g_bz[i].r.w != w || g_bz[i].r.h != h) continue;
+		if (i != g_bz_loaded) {
+			g_bz_loaded = -1;
+			if (!bezel_load(i)) continue;
+			g_bz_loaded = i;
+			g_bz_gen++;
+		}
+		return &g_bz[i].r;
+	}
+	if (w != g_bz_miss_w || h != g_bz_miss_h) {
+		g_bz_miss_w = w; g_bz_miss_h = h;
+		snprintf(msg, sizeof msg, "video: no %s bezel for %dx%d in %s; Retro with no bezel", g_bz_lens, w, h, g_bz_dir);
+		diatom_port_log(DIATOM_LOG_INFO, msg);
+	}
+	return NULL;
+}
+
 void diatom_port_present(const void *src, int w, int h, size_t pitch,
                          diatom_pixfmt fmt, diatom_rect dst, diatom_filter filter)
 {
@@ -1212,24 +1318,37 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	px = page_px(back);
 	/* The scanline filter needs the game at 2x or more. */
 	bool scan = g_fx != FX_OFF && dst.h >= 2 * h;
+	bool look = g_look && diatom_look_fits(g_look, w, h, dst);
+	/* A bezel moves the picture to where its art has the window. */
+	const diatom_rect *bz = look ? bezel_for(dst.w, dst.h) : NULL;
+	unsigned bg = bz ? g_bz_gen : 0;
 
+	if (bz) { dst.x = bz->x; dst.y = bz->y; }
 	/* The rect moved, or an overlay was on this page: clear the borders.
 	 * Scanlines started or stopped with the rect unchanged (the core's frame
-	 * height changed): the rows they skip must not keep the last picture. */
-	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w || g_scan_drawn[back] != scan) {
-		clear_page(back);
+	 * height changed): the rows they skip must not keep the last picture.
+	 * Under a bezel the border is its page instead of black. */
+	if (memcmp(&g_last_dst[back], &dst, sizeof dst) != 0 || g_ov_drawn[back].w || g_scan_drawn[back] != scan ||
+	    g_page_bg[back] != bg) {
+		if (bz) diatom_bezel_fill(&g_bezel, px, pitch_px);
+		else clear_page(back);
 		g_last_dst[back] = dst;
 		g_ov_drawn[back].w = 0;
 		g_scan_drawn[back] = scan;
+		g_page_bg[back] = bg;
 	}
 	uint64_t t0 = diatom_port_now_us(), t1, t2;
 
-	choose_path(w, h, fmt, dst, filter, scan);
-	if (g_path.path == PATH_BLIT)
+	choose_path(w, h, fmt, dst, filter, scan, look ? g_look : NULL, bz != NULL);
+	if (g_path.path == PATH_LOOK) {
+		/* Out of memory for its tables: the picture as it would be with no look. */
+		if ((drawn = diatom_look_prepare(&g_lookr, g_look, w, h, dst, (int)g_var.xres, (int)g_var.yres)))
+			diatom_look_draw(&g_lookr, src, pitch, fmt, px, pitch_px);
+	} else if (g_path.path == PATH_BLIT)
 		drawn = gfx_frame(src, w, h, pitch, fmt, dst, back, scan);
 	else if (g_path.path == PATH_CRISP)
 		drawn = gfx_crisp(src, w, h, pitch, fmt, dst, back, g_path.kx, g_path.ky);
-	if (!drawn && g_path.path != PATH_CPU) {
+	if (!drawn && g_path.path != PATH_CPU && g_path.path != PATH_LOOK) {
 		g_blit_fail++;
 		/* The CPU is about to fill the rows a scanline blit leaves dark: have
 		 * the next scanline frame on this page clear them. */
@@ -1237,6 +1356,7 @@ void diatom_port_present(const void *src, int w, int h, size_t pitch,
 	}
 	if (!drawn && diatom_scaler_prepare(&g_scaler, w, h, dst, g_path.cpu, (int)g_var.xres, (int)g_var.yres))
 		diatom_scaler_draw(&g_scaler, src, pitch, fmt, px, pitch_px);
+	if (bz) diatom_bezel_reblend(&g_bezel, px, pitch_px);
 	t1 = diatom_port_now_us();
 	if (g_ov && diatom_port_now_us() < g_ov_until) {
 		draw_overlay(px, pitch_px);
@@ -1264,22 +1384,63 @@ void diatom_port_present_stop(diatom_park park)
 	memset(g_last_dst, 0, sizeof g_last_dst);
 }
 
+static const char *file_of(const char *path)
+{
+	const char *f = strrchr(path, '/');
+
+	return f ? f + 1 : path;
+}
+
+/* A pass 2 of "flipfx-bezel-<lens>": the lens, and bezels/ beside the path. */
+static bool bezel_pass(const char *path, char lens[8], char dir[256])
+{
+	static const char *const LENS[] = { "dmg", "pocket", "gbc", "gba" };
+	const char *f = file_of(path), *q = strstr(f, "flipfx-bezel-");
+	size_t n = 0;
+
+	if (!q) return false;
+	q += strlen("flipfx-bezel-");
+	while (q[n] >= 'a' && q[n] <= 'z') n++;
+	for (size_t i = 0; i < sizeof LENS / sizeof *LENS; i++)
+		if (n == strlen(LENS[i]) && !strncmp(q, LENS[i], n)) {
+			snprintf(lens, 8, "%s", LENS[i]);
+			if ((size_t)snprintf(dir, 256, "%.*sbezels", (int)(f - path), path) >= 256) return false;
+			return true;
+		}
+	return false;
+}
+
 bool diatom_port_shader_set(const diatom_shader_pass *p, int n, bool final_linear,
                             char *err, size_t cap)
 {
 	int fx = FX_OFF;
+	const diatom_look_screen *look = NULL;
+	char lens[8] = "", dir[256] = "";
+	bool changed;
 
 	(void)final_linear;
-	if (n == 1 && p[0].path && strstr(p[0].path, "flipfx-scanlines")) fx = FX_SCAN;
-	else if (n != 0) {
-		snprintf(err, cap, "this port has the scanline filter only");
-		return false;
+	for (int i = 0; i < n && i < 2; i++)
+		if (!p[i].path) goto refuse;
+	if (n == 1 && strstr(file_of(p[0].path), "flipfx-scanlines")) fx = FX_SCAN;
+	else if (n == 1 || n == 2) {
+		if (!(look = diatom_look_find(p[0].path))) goto refuse;
+		if (n == 2 && !bezel_pass(p[1].path, lens, dir)) goto refuse;
+	} else if (n != 0) {
+		goto refuse;
 	}
-	if (fx != g_fx) {
-		g_fx = fx;
-		memset(g_last_dst, 0, sizeof g_last_dst);   /* the filter leaves rows unwritten: start from clear pages */
-	}
+	changed = fx != g_fx || look != g_look || strcmp(lens, g_bz_lens) != 0 || strcmp(dir, g_bz_dir) != 0;
+	look_reset();
+	g_fx = fx;
+	g_look = look;
+	memcpy(g_bz_lens, lens, sizeof lens);
+	memcpy(g_bz_dir, dir, sizeof dir);
+	if (lens[0]) bezel_scan();
+	/* Scanlines leave rows unwritten and a bezel leaves its page: start from clear pages. */
+	if (changed) memset(g_last_dst, 0, sizeof g_last_dst);
 	return true;
+refuse:
+	snprintf(err, cap, "this port has the scanline filter, the Look's screens and their bezels only");
+	return false;
 }
 
 bool diatom_port_grab(uint8_t **rgb, int *w_out, int *h_out)
@@ -1356,6 +1517,7 @@ void diatom_port_shutdown(void)
 	 * longer (5 ms -> 22 ms) until a power cycle (plorpos-f1p.31). */
 	if (g_src_virt) { mi.munmap(g_src_virt, g_src_size); mi.mma_free(g_src_phy); g_src_virt = NULL; g_src_size = 0; }
 	diatom_scaler_free(&g_scaler);
+	look_reset();
 	free(g_line);
 	g_line = NULL;
 	g_line_size = 0;

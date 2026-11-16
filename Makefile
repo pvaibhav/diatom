@@ -34,8 +34,9 @@ PORT_EXTRA_gkd   := port/gkd_gl.c
 PORT_EXTRA_brick := port/gkd_gl.c
 # The GL window while a shader is set, as the Brick (port/h700.c).
 PORT_EXTRA_h700  := port/gkd_gl.c
-# The Flip's CPU scaling (ADR-9001), its own file for the host test and scalebench.
-PORT_EXTRA_miyoo := port/miyoo_scale.c
+# The Flip's CPU scaling (ADR-9001) and its Look (ADR-9002), their own files for
+# the host tests, scalebench and lookshot.
+PORT_EXTRA_miyoo := port/miyoo_scale.c port/miyoo_look.c
 # The Rotate is the GKD's session (sway, PipeWire): the same port file.
 PORT_SRC_rotate  := port/gkd.c
 PORT_EXTRA_rotate := port/gkd_gl.c
@@ -81,7 +82,13 @@ $(LZ4_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP
 # Same terms - its own flags, the header never patched.
 STB_DIR := vendor/stb
 STB_OBJ := $(BUILD)/$(STB_DIR)/stb_image_write.o
-$(STB_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP -I$(STB_DIR)
+# stb_image: the Flip's bezel images (ADR-9002), and lookshot's frames. Only
+# the Flip links it.
+STB_IMG_OBJ := $(BUILD)/$(STB_DIR)/stb_image.o
+$(STB_OBJ) $(STB_IMG_OBJ): CFLAGS := -std=gnu11 -O2 -MMD -MP -I$(STB_DIR)
+ifeq ($(PORT),miyoo)
+  STB_OBJ += $(STB_IMG_OBJ)
+endif
 
 ifeq ($(PORT),desktop)
   # sdl2-config ships with SDL2 itself; pkg-config is a separate install and is
@@ -339,6 +346,18 @@ $(TOOLS_DIR)/scalebench: tools/scalebench.c port/miyoo_scale.c port/miyoo_scale.
 	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 $(filter -m%,$(CFLAGS)) -Iinclude -Isrc -Iport \
 		-o $@ tools/scalebench.c port/miyoo_scale.c src/scale.c -lm $(if $(filter miyoo,$(PORT)),-static)
 
+# The page the Flip's Look draws (ADR-9002) for a frame, as an upright PNG, to
+# compare against mock-ups. Host:
+#   make lookshot
+#   build/desktop/tools/lookshot FRAME.png LOOK WxH+X+Y OUT.png [BEZEL.png]
+.PHONY: lookshot
+lookshot: $(TOOLS_DIR)/lookshot
+
+$(TOOLS_DIR)/lookshot: tools/lookshot.c port/miyoo_look.c port/miyoo_look.h $(STB_OBJ) $(STB_IMG_OBJ)
+	@mkdir -p $(TOOLS_DIR)
+	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -Iinclude -Iport -I$(STB_DIR) \
+		-o $@ tools/lookshot.c port/miyoo_look.c $(sort $(STB_OBJ) $(STB_IMG_OBJ)) -lm
+
 # fbdev <-> EGL window, in one process, back and forth (plorpos-reo.4.1):
 #   tools/brick-make.sh glswitch
 .PHONY: glswitch
@@ -403,7 +422,7 @@ $(BUILD)/%.o: %.c
 # fails when it is broken. check-seam has held since day one for exactly that
 # reason; the register drifted 418 -> 992 lines in three days because nothing
 # ever complained.
-check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options check-flipscale
+check: check-seam check-register check-corefacts check-rates check-cheevos check-proto check-port check-stateplane check-rewind check-turboassign check-stylus check-dslayout check-options check-flipscale check-fliplook
 
 # Does a RetroAchievements address reach the byte it names? Offline, needs no
 # core and no ROM, and links only cheevos.c plus the vendored runtime - so it
@@ -498,6 +517,24 @@ $(BUILD)/flipscale-test: test/flipscale_test.c port/miyoo_scale.c port/miyoo_sca
 	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport $(SAN_AU) \
 	   -fno-sanitize-recover=all -o $@ test/flipscale_test.c port/miyoo_scale.c src/scale.c -lm
 .PHONY: check-flipscale
+
+# The Flip's Look renderers and bezel (ADR-9002) against per-pixel references
+# written from their definitions. Host compiler.
+check-fliplook: $(BUILD)/fliplook-test
+	@./$(BUILD)/fliplook-test
+
+# stb for the test: under the sanitizers, as hostile files are decoded, and on
+# stb's own terms otherwise.
+FLIPLOOK_STB := $(BUILD)/fliplook-stb_image.o $(BUILD)/fliplook-stb_image_write.o
+$(FLIPLOOK_STB): $(BUILD)/fliplook-%.o: $(STB_DIR)/%.c $(STB_DIR)/%.h
+	@mkdir -p $(@D)
+	cc -std=gnu11 -O1 -g -I$(STB_DIR) $(SAN_AU) -fno-sanitize-recover=all -c -o $@ $<
+
+$(BUILD)/fliplook-test: test/fliplook_test.c port/miyoo_look.c port/miyoo_look.h $(FLIPLOOK_STB)
+	@mkdir -p $(BUILD)
+	cc -std=gnu11 -Wall -Wextra -O1 -g -Iinclude -Isrc -Iport -I$(STB_DIR) $(SAN_AU) \
+	   -fno-sanitize-recover=all -o $@ test/fliplook_test.c port/miyoo_look.c $(FLIPLOOK_STB) -lm
+.PHONY: check-fliplook
 
 # Deliberately NOT part of `check`. It needs a build and it runs in real time -
 # Diatom paces to the core's frame rate, so 300 frames costs five seconds of
@@ -620,4 +657,4 @@ conform-device:
 # would otherwise become the default goal, and `make` would silently build one
 # object and stop - which it did, on 2026-08-26, and looked exactly like the
 # docker mtime staleness it was added to prevent.
--include $(OBJ:.o=.d) $(RC_OBJ:.o=.d) $(LZ4_OBJ:.o=.d) $(STB_OBJ:.o=.d)
+-include $(OBJ:.o=.d) $(RC_OBJ:.o=.d) $(LZ4_OBJ:.o=.d) $(STB_OBJ:.o=.d) $(STB_IMG_OBJ:.o=.d)

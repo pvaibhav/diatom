@@ -99,14 +99,16 @@ copyleft in. Only `lib/lz4.c` and `lib/lz4.h` of v1.10.0 are carried, unmodified
 ## `vendor/stb/`
 
 `stb_image_write.h` v1.16, the screenshot hotkey's PNG encoder (`src/shot.c`,
-plorpos-gkd.86.2), vendored because neither device image ships a libpng.
+plorpos-gkd.86.2), and `stb_image.h` v2.30, the Flip's decoder for its bezel
+images (ADR-9002), vendored because neither device image ships a libpng.
 
 - **Sean Barrett** and contributors
 - **Public domain (Unlicense) or MIT**, the reader's choice; taken as MIT. Both
-  texts are at the end of the header.
+  texts are at the end of each header.
 
-Unmodified. `vendor/stb/stb_image_write.c` is this repo's own one-line wrapper
-that compiles the implementation; `vendor/stb/README.md` says why.
+Unmodified. `vendor/stb/stb_image_write.c` and `vendor/stb/stb_image.c` are
+this repo's own wrappers that compile the implementations;
+`vendor/stb/README.md` says why.
 
 ## Cores
 

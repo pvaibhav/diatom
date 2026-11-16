@@ -179,6 +179,24 @@ scalebench` builds it for the host, but host times say nothing about the Flip.
 The simulator's fb0 is a preloaded shim, which a static binary does not load, so
 `--fb` works only on the device.
 
+## `lookshot.c` - the page the Flip's Look draws
+
+*What does the Look draw for this frame
+([ADR-9002](../docs/decisions/9002-the-flip-draws-the-look-on-the-cpu.md))?*
+
+Runs `port/miyoo_look.c`, the port's own renderers and bezel code, on one frame
+and writes the 752x560 page upright as a PNG, to compare with a mock-up or a
+device screenshot:
+
+    make lookshot
+    build/desktop/tools/lookshot [--rgb565] FRAME.png LOOK WxH+X+Y OUT.png [BEZEL.png]
+
+`LOOK` is a screen (`dots-dmg`, `dots-pocket`, `dots-light`, `grid-gbc`,
+`grid-gba`) and the rect is the display rect diatom is handed. A bezel image
+whose name gives that rect's size moves the picture to the name's corner, as on
+the device; any other is left out, and lookshot says so. `--rgb565` hands the
+frame over as an RGB565 core would.
+
 ## `check-register.py` - a check, not an instrument
 
 *Can the register still be trusted to say what is left?*

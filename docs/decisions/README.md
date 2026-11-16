@@ -103,3 +103,4 @@ never started.
 | [0048](0048-the-vsync-lock-is-not-on-by-default-beyond-pokedaisy.md) | The vsync lock is not on by default for cores other than PokeDaisy | Accepted (Flip: superseded by 0049) |
 | [0049](0049-the-flip-retimes-its-panel-and-locks-every-core.md) | On the Miyoo Mini Flip, retime the panel to the core and lock every core to it | Accepted |
 | [9001](9001-the-flip-scales-with-the-blitter-and-draws-integer-on-the-cpu.md) | On the Miyoo Mini Flip, scale with the blitter, give Crisp a CPU upscale, and draw Integer on the CPU | Accepted |
+| [9002](9002-the-flip-draws-the-look-on-the-cpu.md) | On the Miyoo Mini Flip, draw the Game Boy, Color and Advance Look and its bezel on the CPU, picked by the shader chain's names | Accepted |
