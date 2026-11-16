@@ -65,7 +65,7 @@ static int widest(int n_src, int n_dst)
 bool diatom_look_fits(const diatom_look_screen *s, int src_w, int src_h, diatom_rect dst)
 {
 	if (!s || src_w <= 0 || src_h <= 0 || src_w > 240 || src_h > 160) return false;
-	if (dst.w < 2 * src_w || dst.h < 2 * src_h) return false;
+	if (dst.w < 2 * src_w || dst.h < 2 * src_h || dst.w > UINT16_MAX || dst.h > UINT16_MAX) return false;
 	if (s->kind == DIATOM_LOOK_DOTS &&
 	    (widest(src_w, dst.w) > DIATOM_LOOK_MAX_CELL || widest(src_h, dst.h) > DIATOM_LOOK_MAX_CELL))
 		return false;
@@ -311,7 +311,13 @@ bool diatom_look_prepare(diatom_look *l, const diatom_look_screen *s, int src_w,
 	    l->fb_h == fb_h && !memcmp(&l->dst, &dst, sizeof dst))
 		return true;
 	diatom_look_free(l);
-	if (!diatom_look_fits(s, src_w, src_h, dst) || fb_w <= 0 || fb_h <= 0) return false;
+	if (!diatom_look_fits(s, src_w, src_h, dst) || fb_w <= 0 || fb_h <= 0 || fb_w > INT16_MAX || fb_h > INT16_MAX)
+		return false;
+	/* A mode crops a little at most. Twice the panel keeps every cell start
+	 * and length in the maps' 16 bits and the arithmetic on dst.x and dst.y
+	 * in an int. */
+	if (dst.w > 2 * fb_w || dst.h > 2 * fb_h || dst.x < -dst.w || dst.x > fb_w || dst.y < -dst.h || dst.y > fb_h)
+		return false;
 	l->screen = s;
 	l->src_w = src_w; l->src_h = src_h; l->dst = dst; l->fb_w = fb_w; l->fb_h = fb_h;
 

@@ -66,9 +66,10 @@ const diatom_look_screen *diatom_look_find(const char *path);
 #define DIATOM_LOOK_MAX_CELL 6
 
 /* Whether the look draws this frame into this rect: a frame of at most
- * 240x160 at 2x or more on both axes (the contract with the launcher), and
- * for dots no cell wider than DIATOM_LOOK_MAX_CELL. Otherwise the port draws
- * the picture as it would with no look. */
+ * 240x160 at 2x or more on both axes (the contract with the launcher), a
+ * rect no longer than 16 bits on either side, and for dots no cell wider
+ * than DIATOM_LOOK_MAX_CELL. Otherwise the port draws the picture as it
+ * would with no look. */
 bool diatom_look_fits(const diatom_look_screen *s, int src_w, int src_h, diatom_rect dst);
 
 typedef struct {
@@ -108,7 +109,8 @@ typedef struct {
 } diatom_look;
 
 /* Build the tables for this geometry; a no-op when nothing changed. False
- * when the look does not fit (diatom_look_fits) or memory runs out, and then
+ * when the look does not fit (diatom_look_fits), the rect is more than twice
+ * the panel on a side or starts beyond it, or memory runs out, and then
  * nothing is drawn. */
 bool diatom_look_prepare(diatom_look *l, const diatom_look_screen *s, int src_w, int src_h,
                          diatom_rect dst, int fb_w, int fb_h);

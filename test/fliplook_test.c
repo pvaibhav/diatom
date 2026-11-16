@@ -295,6 +295,43 @@ int main(void)
 		CHECK(!diatom_look_fits(dots, 100, 100, (diatom_rect){ 0, 0, 700, 500 }), "dots wider than the table's cells do not");
 		CHECK(diatom_look_fits(grid, 100, 100, (diatom_rect){ 0, 0, 700, 500 }), "a grid of any cell does");
 		CHECK(!diatom_look_fits(NULL, 160, 144, (diatom_rect){ 0, 0, 480, 432 }), "no screen, no look");
+		CHECK(!diatom_look_fits(grid, 1, 1, (diatom_rect){ 0, 0, 65536, 2 }) &&
+		      !diatom_look_fits(grid, 1, 1, (diatom_rect){ 0, 0, 2, 65536 }),
+		      "a rect longer than the maps' 16 bits does not");
+	}
+
+	printf("fliplook: what prepare refuses\n");
+	{
+		static const struct { const char *what; diatom_rect d; } REFUSED[] = {
+			{ "wider than twice the panel", { 0, 0, 2 * FB_W + 1, 4 } },
+			{ "taller than twice the panel", { 0, 0, 4, 2 * FB_H + 1 } },
+			{ "the widest the maps hold", { 0, 0, 65535, 2 } },
+			{ "starting past the panel's right", { FB_W + 1, 0, 4, 4 } },
+			{ "starting past the panel's bottom", { 0, FB_H + 1, 4, 4 } },
+			{ "ending before the panel's left", { -5, 0, 4, 4 } },
+			{ "ending above the panel's top", { 0, -5, 4, 4 } },
+			{ "at the most negative x", { -2147483647 - 1, 0, 4, 4 } },
+		};
+		const diatom_look_screen *grid = screen("grid-gbc");
+		image im = make_image(1, 1, DIATOM_PIX_XRGB8888, false);
+		diatom_look l;
+		uint32_t *fb = page();
+		bool untouched = true;
+
+		memset(&l, 0, sizeof l);
+		for (size_t i = 0; i < sizeof REFUSED / sizeof *REFUSED; i++) {
+			CHECK(!diatom_look_prepare(&l, grid, 1, 1, REFUSED[i].d, FB_W, FB_H), "a rect %s is refused", REFUSED[i].what);
+			diatom_look_draw(&l, im.px, im.pitch, im.fmt, fb, FB_W);
+		}
+		for (int i = 0; i < FB_W * FB_H; i++) untouched &= fb[i] == SENTINEL;
+		CHECK(untouched, "and draws nothing");
+		CHECK(!diatom_look_prepare(&l, grid, 1, 1, (diatom_rect){ 0, 0, 4, 4 }, INT16_MAX + 1, FB_H),
+		      "a panel wider than 15 bits is refused");
+		CHECK(diatom_look_prepare(&l, grid, 160, 144, (diatom_rect){ -8, -8, 2 * FB_W, 2 * FB_H }, FB_W, FB_H),
+		      "a rect twice the panel, cropped, is not");
+		diatom_look_free(&l);
+		free(fb);
+		free_image(&im);
 	}
 
 	printf("fliplook: Game Boy dots and Game Boy Color grid, the panel's modes\n");
