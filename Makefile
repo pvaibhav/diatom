@@ -346,6 +346,18 @@ $(TOOLS_DIR)/scalebench: tools/scalebench.c port/miyoo_scale.c port/miyoo_scale.
 	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 $(filter -m%,$(CFLAGS)) -Iinclude -Isrc -Iport \
 		-o $@ tools/scalebench.c port/miyoo_scale.c src/scale.c -lm $(if $(filter miyoo,$(PORT)),-static)
 
+# The page the Flip's Look draws (ADR-9002) for a frame, as an upright PNG, to
+# compare against mock-ups. Host:
+#   make lookshot
+#   build/desktop/tools/lookshot FRAME.png LOOK WxH+X+Y OUT.png [BEZEL.png]
+.PHONY: lookshot
+lookshot: $(TOOLS_DIR)/lookshot
+
+$(TOOLS_DIR)/lookshot: tools/lookshot.c port/miyoo_look.c port/miyoo_look.h $(STB_OBJ) $(STB_IMG_OBJ)
+	@mkdir -p $(TOOLS_DIR)
+	$(CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -O2 -Iinclude -Iport -I$(STB_DIR) \
+		-o $@ tools/lookshot.c port/miyoo_look.c $(sort $(STB_OBJ) $(STB_IMG_OBJ)) -lm
+
 # fbdev <-> EGL window, in one process, back and forth (plorpos-reo.4.1):
 #   tools/brick-make.sh glswitch
 .PHONY: glswitch
